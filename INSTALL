@@ -1,0 +1,5 @@
+1. Read README.
+2. Modify hooks.c.
+3. make 
+4. Install lltop somewhere in your $PATH on admin node.
+5. Install lltop-serv to the right place on the servers.

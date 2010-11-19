@@ -1,0 +1,14 @@
+main.c: 
+  Implement --help.
+  Print usage when called with no arguments.
+  Document -i/--interval argument.
+
+serv.c: 
+  Consider scanning /proc/fs/lustre/{mds,obdfilter}/<tgt_name>/exports/<cli_name>/ldlm_stats.
+
+hooks.c:
+  Facilitate delegating to external commands.
+  The pipeline 
+    sed 's/@.*$//' /proc/fs/lustre/osc/<fs_name>-*/*_conn_uuid | sort | uniq
+  could be used to automate lltop_get_serv_list().
+  Add job owners to output of lltop_print_name_stats().
