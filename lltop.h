@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DEFAULT_SLEEP_INTVL 10
+#define DEFAULT_LLTOP_INTVL 10
 
 #ifdef DEBUG
 #define ERROR(fmt,arg...) \

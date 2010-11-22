@@ -18,6 +18,7 @@
  */
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <getopt.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,11 +30,96 @@
 #include "lltop.h"
 #include "hooks.h"
 
-const char *sge_execd_spool_path = "/share/sge6.2/execd_spool";
+int lltop_intvl = DEFAULT_LLTOP_INTVL;
 const char *lltop_ssh_path = "/usr/bin/ssh";
 const char *lltop_serv_path = "/usr/local/bin/lltop-serv";
+int (*lltop_get_host)(const char *addr, char *host, size_t host_size);
+int (*lltop_get_job)(const char *host, char *job, size_t job_size);
 
-int lltop_use_fqdn = 0;
+static const char *external_get_host_path = NULL;
+static int external_get_host(const char *addr, char *host, size_t host_size);
+
+static int getnameinfo_use_fqdn = 0;
+static int getnameinfo_get_host(const char *addr, char *host, size_t host_size);
+
+static const char *external_get_job_path = NULL;
+static int external_get_job(const char *host, char *job, size_t job_size);
+
+static const char *sge_execd_spool_path = "/share/sge6.2/execd_spool";
+static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size);
+
+int print_header = 1;
+
+static int lltop_usage(void)
+{
+  ERROR("usage: %s fs_name\n", program_invocation_short_name);
+  /* TODO List options. */
+  exit(1);
+}
+
+int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
+{
+  lltop_get_host = &getnameinfo_get_host;
+  lltop_get_job = &sge_execd_spool_get_job;
+
+  struct option opts[] = {
+    { "use-fqdn",   0, 0, 'f' }, /* getnameinfo_use_fqdn */
+    { "help",       0, 0, 'h' }, /* lltop_usgae() */
+    { "interval",   1, 0, 'i' }, /* lltop_intvl */
+    { "get-job",    1, 0, 'j' }, /* external_get_job_path */
+    { "get-host",   1, 0, 'k' }, /* external_get_host_path */
+    { "no-header",  0, 0, 'n' }, /* no_header */
+    { "ssh",        1, 0, 'r' }, /* lltop_ssh_path */
+    { "lltop-serv", 1, 0, 's' }, /* lltop_serv_path */
+    /* TODO external_get_serv_list */
+    { 0, 0, 0, 0, },
+  };
+
+  int c;
+  while ((c = getopt_long(argc, argv, "fhi:j:k:nr:s:", opts, 0)) != -1) {
+    switch (c) {
+    case 'f':
+      getnameinfo_use_fqdn = 1;
+      break;
+    case 'h':
+      lltop_usage();
+      break;
+    case 'i':
+      lltop_intvl = atoi(optarg);
+      if (lltop_intvl <= 0)
+        FATAL("invalid sleep interval \"%s\"\n", optarg);
+      break;
+    case 'j':
+      external_get_job_path = optarg;
+      lltop_get_job = &external_get_job;
+      break;
+    case 'k':
+      external_get_host_path = optarg;
+      lltop_get_host = &external_get_host;
+      break;
+    case 'n':
+      print_header = 0;
+      break;
+    case 'r':
+      lltop_ssh_path = optarg;
+      break;
+    case 's':
+      lltop_serv_path = optarg;
+      break;
+    case '?':
+      break;
+    }
+  }
+
+  const char *fs_name = argv[optind];
+  if (optind == argc || fs_name == NULL)
+    FATAL("usage: %s fs_name\n", program_invocation_short_name);
+
+  if (lltop_get_serv_list(fs_name, serv_list, serv_count) < 0)
+    FATAL("cannot get server list for %s: %m\n", fs_name);
+
+  return 0;
+}
 
 int lltop_get_serv_list(const char *fs_name, char ***serv_list, int *serv_count)
 {
@@ -90,7 +176,66 @@ void lltop_free_serv_list(char **serv_list, int serv_count)
   free(serv_list);
 }
 
-int lltop_get_host(const char *addr, char *host, size_t host_size)
+void lltop_print_header(FILE *file)
+{
+  /* Called once before lltop_print_name_stats(). This is your chance
+   * to make a pretty header for your data.  Try to keep field widths
+   * consistent between header and stats. */
+  if (print_header)
+    fprintf(file, "%-16s %8s %8s %8s\n", "JOBID", "WR_MB", "RD_MB", "REQS");
+}
+
+void lltop_print_name_stats(FILE *file, const char *name, long wr_B, long rd_B, long reqs)
+{
+  /* Called for each job to be output by lltop.  Note we convert bytes
+   * to MB.  Consider adding job owner (if applicable) to output. */
+
+  fprintf(file, "%-16s %8lu %8lu %8lu\n", name, wr_B >> 20, rd_B >> 20, reqs);
+}
+
+static int command(const char *path, const char *arg, char *buf, size_t buf_size)
+{
+  /* Helper to do basic command substitution. */
+
+  int fscanf_rc = -1, pclose_rc = -1;
+  char *cmd = NULL;
+  FILE *pipe = NULL;
+
+  asprintf(&cmd, "%s %s", path, arg);
+  pipe = popen(cmd, "r");
+  if (pipe == NULL) {
+    ERROR("cannot execute %s: %m\n", cmd);
+    goto out;
+  }
+
+  /* Stupid fscanf() does not have direct support for varaible maximum
+     field width specifications.  So we use snprintf() to create a
+     format string with the right field width encoded.  For example,
+     if job_size is 1234, then fscanf_fmt should be "%1234s".
+     This is stupid, should just use getline().
+     XXX -1 */
+  char fscanf_fmt[3 + 3 * sizeof(size_t)];
+  snprintf(fscanf_fmt, sizeof(fscanf_fmt), "%%%zus", buf_size - 1);
+
+  /* CHECKME What is fscanf_rc when output is all whitespace? */
+  fscanf_rc = fscanf(pipe, fscanf_fmt, buf);
+  if (fscanf_rc != 1)
+    buf[0] = '\0';
+
+  if ((pclose_rc = pclose(pipe)) < 0)
+    ERROR("cannot obtain termination status of %s: %m\n", cmd);
+
+ out:
+  free(cmd);
+  return fscanf_rc == 1 && pclose_rc == 0 ? 0 : -1;
+}
+
+static int external_get_host(const char *addr, char *host, size_t host_size)
+{
+  return command(external_get_host_path, addr, host, host_size);
+}
+
+static int getnameinfo_get_host(const char *addr, char *host, size_t host_size)
 {
   /* Find hostname for addr (a dotted-quad string) and store in buffer
    * host of size host_size.  Return 0 if host was written, -1
@@ -119,16 +264,21 @@ int lltop_get_host(const char *addr, char *host, size_t host_size)
   /* Setting NI_NOFQDN for the same effect doesn't seem to work here.
    * Maybe a problem with site config.  We shouldn't have to worry
    * about truncating numerical addresses since we set NI_NAMEREQD. */
-  if (!lltop_use_fqdn)
+  if (!getnameinfo_use_fqdn)
     chop(host, '.');
 
   return 0;
 }
 
-int lltop_get_job(const char *host, char *job, size_t job_size)
+static int external_get_job(const char *host, char *job, size_t job_size)
+{
+  return command(external_get_job_path, host, job, job_size);
+}
+
+static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size)
 {
   /* Find jobname for host and store in buffer job of size job_size.
-   * Return 0 if job was written, -1 otherwise.  Note thet job_size
+   * Return 0 if job was written, -1 otherwise.  Note that job_size
    * is the size of the buffer so you can safely do snprintf(job,
    * job, "%s", very_long_str).
    *
@@ -136,11 +286,13 @@ int lltop_get_job(const char *host, char *job, size_t job_size)
    * with jobid <job_id> on host <host> is associated with a directory
    * /share/sge6.2/execd_spool/<host>/active_jobs/<job_id>.<array_task>. */
 
-  char jobs_dir_path[160];
-  snprintf(jobs_dir_path, sizeof(jobs_dir_path), "%s/%s/active_jobs",
-           sge_execd_spool_path, host);
+  int rc = -1;
+  char *jobs_dir_path = NULL;
+  DIR *jobs_dir = NULL;
 
-  DIR *jobs_dir = opendir(jobs_dir_path);
+  asprintf(&jobs_dir_path, "%s/%s/active_jobs", sge_execd_spool_path, host);
+
+  jobs_dir = opendir(jobs_dir_path);
   if (jobs_dir == NULL) {
     /* Cannot find an active_jobs directory for host.  This need not
        be an error. */
@@ -151,10 +303,9 @@ int lltop_get_job(const char *host, char *job, size_t job_size)
     if (!sge_access_checked && access(sge_execd_spool_path, R_OK|X_OK) < 0)
       ERROR("%s: cannot open %s: %m\n", __func__, sge_execd_spool_path);
     sge_access_checked = 1;
-    return -1;
+    goto out;
   }
 
-  int rc = -1;
   struct dirent *ent;
   while ((ent = readdir(jobs_dir))) {
     if (ent->d_type == DT_DIR && ent->d_name[0] != '.') {
@@ -164,24 +315,11 @@ int lltop_get_job(const char *host, char *job, size_t job_size)
       break;
     }
   }
-  closedir(jobs_dir);
+
+ out:
+  if (jobs_dir != NULL)
+    closedir(jobs_dir);
+  free(jobs_dir_path);
 
   return rc;
-}
-
-void lltop_print_header(FILE *file)
-{
-  /* Called once before lltop_print_name_stats(), your chance to make
-   * a pretty header for your data.  Try to keep field widths
-   * consistent between header and stats. */
-
-  fprintf(file, "%-16s %8s %8s %8s\n", "JOBID", "WR_MB", "RD_MB", "REQS");
-}
-
-void lltop_print_name_stats(FILE *file, const char *name, long wr_B, long rd_B, long reqs)
-{
-  /* Called for each job to be output by lltop.  Note we convert bytes
-   * to MB.  Consider adding job owner (if applicable) to output. */
-
-  fprintf(file, "%-16s %8lu %8lu %8lu\n", name, wr_B >> 20, rd_B >> 20, reqs);
 }

@@ -19,7 +19,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -46,13 +45,37 @@ struct rb_root addr_cache_root = RB_ROOT;
 struct rb_root name_stats_root = RB_ROOT;
 int name_stats_count = 0;
 
+/* MOVEME */
+static inline void rb_destroy(struct rb_root *root, size_t offset, void (*dtor)(void*))
+{
+  struct rb_node *node = root->rb_node;
+  *root = RB_ROOT;
+
+  while (node != 0) {
+    if (node->rb_left != 0) {
+      struct rb_node *left_child = node->rb_left;
+      node->rb_left = 0;
+      node = left_child;
+    } else if (node->rb_right != 0) {
+      struct rb_node *right_child = node->rb_right;
+      node->rb_right = 0;
+      node = right_child;
+    } else {
+      void *container = ((char*) node) - offset;
+      node = rb_parent(node);
+      if (dtor != NULL)
+        (*dtor)(container);
+    }
+  }
+}
+
 static void account(const char *addr, long wr, long rd, long reqs)
 {
   struct addr_cache *cache = NULL;
   struct name_stats *stats = NULL;
   char host[MAXNAME + 1];
   char job[MAXNAME + 1];
-  const char *name; /* For look-up in name_stats tree. */
+  const char *name; /* For look-up in name_stats tree, may be addr, host, or job. */
 
   struct rb_node **link, *parent;
 
@@ -60,7 +83,7 @@ static void account(const char *addr, long wr, long rd, long reqs)
   link = &(addr_cache_root.rb_node);
   parent = NULL;
   while (*link != NULL) {
-    cache = container_of(*link, struct addr_cache, ac_node);
+    cache = rb_entry(*link, struct addr_cache, ac_node);
     parent = *link;
 
     int cmp = strcmp(addr, cache->ac_addr);
@@ -81,9 +104,9 @@ static void account(const char *addr, long wr, long rd, long reqs)
   strcpy(cache->ac_addr, addr);
 
   /* Try to find host, job for addr. */
-  if (lltop_get_host(addr, host, sizeof(host)) < 0)
+  if ((*lltop_get_host)(addr, host, sizeof(host)) < 0)
     name = addr;
-  else if (lltop_get_job(host, job, sizeof(job)) < 0)
+  else if ((*lltop_get_job)(host, job, sizeof(job)) < 0)
     name = host;
   else
     name = job;
@@ -92,7 +115,7 @@ static void account(const char *addr, long wr, long rd, long reqs)
   link = &(name_stats_root.rb_node);
   parent = NULL;
   while (*link != NULL) {
-    stats = container_of(*link, struct name_stats, ns_node);
+    stats = rb_entry(*link, struct name_stats, ns_node);
     parent = *link;
 
     int cmp = strcmp(name, stats->ns_name);
@@ -141,41 +164,17 @@ static int name_stats_cmp(const struct name_stats **s1, const struct name_stats 
 
 int main(int argc, char *argv[])
 {
-  int intvl = DEFAULT_SLEEP_INTVL;
-
-  struct option opts[] = {
-    { "interval", 1, 0, 'i' },
-    { 0, 0, 0, 0, },
-  };
-
-  int c;
-  while ((c = getopt_long(argc, argv, "i:", opts, 0)) > 0) {
-    switch (c) {
-    case 'i':
-      intvl = atoi(optarg);
-      if (intvl <= 0)
-        FATAL("invalid sleep interval \"%s\"\n", optarg);
-      continue;
-    case '?':
-      FATAL("invalid option\n");
-    }
-  }
-
-  const char *fs_name = argv[optind];
-  if (optind == argc || fs_name == NULL)
-    FATAL("usage: %s fs_name\n", program_invocation_short_name);
+  char **serv_list = NULL;
+  int serv_count = 0;
+  if (lltop_config(argc, argv, &serv_list, &serv_count) < 0)
+    FATAL("lltop_config() failed\n");
 
   char intvl_arg[80];
-  snprintf(intvl_arg, sizeof(intvl_arg), "--interval=%d", intvl);
+  snprintf(intvl_arg, sizeof(intvl_arg), "--interval=%d", lltop_intvl);
 
   close(0);
   open("/dev/null", O_RDONLY);
   signal(SIGCHLD, SIG_IGN);
-
-  char **serv_list;
-  int serv_count;
-  if (lltop_get_serv_list(fs_name, &serv_list, &serv_count) < 0)
-    FATAL("cannot get server list for %s: %m\n", fs_name);
 
   int fdv[2];
   if (pipe(fdv) < 0)
@@ -194,10 +193,10 @@ int main(int argc, char *argv[])
       close(fdv[1]);
       execl(lltop_ssh_path, lltop_ssh_path, serv_list[i],
             lltop_serv_path, intvl_arg, (char*) NULL);
-      FATAL("cannot exec: %m\n");
+      FATAL("cannot exec: %m\n"); /* XXX Cannot exec what? */
     }
   }
-  lltop_free_serv_list(serv_list, serv_count); /* Pointless. */
+  lltop_free_serv_list(serv_list, serv_count);
   close(fdv[1]);
 
   FILE *stats_pipe = fdopen(fdv[0], "r");
@@ -235,7 +234,7 @@ int main(int argc, char *argv[])
   i = 0;
   struct rb_node *node;
   for (node = rb_first(&name_stats_root); node != NULL; node = rb_next(node))
-    stats_vec[i++] = container_of(node, struct name_stats, ns_node);
+    stats_vec[i++] = rb_entry(node, struct name_stats, ns_node);
 
   qsort(stats_vec, name_stats_count, sizeof(struct name_stats*),
         (int (*)(const void*, const void*)) &name_stats_cmp);
@@ -247,9 +246,12 @@ int main(int argc, char *argv[])
     lltop_print_name_stats(stdout, s->ns_name, s->ns_wr, s->ns_rd, s->ns_reqs);
   }
 
+  /* Cleanup is somewhat pointless since we're exiting right away. */
+#ifdef DEBUG
+  rb_destroy(&addr_cache_root, offsetof(struct addr_cache, ac_node), &free);
+  rb_destroy(&name_stats_root, offsetof(struct name_stats, ns_node), &free);
   free(stats_vec);
-
-  /* Free stats. */
+#endif
 
   return 0;
 }

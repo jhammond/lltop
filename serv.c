@@ -87,7 +87,7 @@ int get_client_stats(const char *cli_name, const char *stats_path, int which)
   parent = NULL;
 
   while (*link != NULL) {
-    stats = container_of(*link, struct name_stats, ns_node);
+    stats = rb_entry(*link, struct name_stats, ns_node);
     parent = *link;
 
     int cmp = strcmp(cli_name, stats->ns_name);
@@ -143,7 +143,7 @@ int get_target_stats(const char *tgt_dir_path, int which)
 
 int main(int argc, char *argv[])
 {
-  int intvl = DEFAULT_SLEEP_INTVL;
+  int intvl = DEFAULT_LLTOP_INTVL;
 
   struct option opts[] = {
     { "interval", 1, 0, 'i' },
@@ -202,14 +202,14 @@ int main(int argc, char *argv[])
     }
 
     if (which == 0) {
-      TRACE("sleeping for %s seconds\n", intvl);
+      TRACE("sleeping for %d seconds\n", intvl);
       sleep(intvl);
     }
   }
 
   struct rb_node *node;
   for (node = rb_first(&name_stats_root); node != NULL; node = rb_next(node)) {
-    struct name_stats *s = container_of(node, struct name_stats, ns_node);
+    struct name_stats *s = rb_entry(node, struct name_stats, ns_node);
 
     /* If any stats are negative then we assume that the client was
        evicted while we slept, so we skip it. */
@@ -226,6 +226,10 @@ int main(int argc, char *argv[])
 
     printf("%s %ld %ld %ld\n", s->ns_name, s->ns_wr, s->ns_rd, s->ns_reqs);
   }
+
+#ifdef DEBUG
+  /* TODO rb_destroy(&name_stats_root, offsetof(struct name_stats, ns_node), &free); */
+#endif
 
   return 0;
 }
