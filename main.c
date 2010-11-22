@@ -45,30 +45,6 @@ struct rb_root addr_cache_root = RB_ROOT;
 struct rb_root name_stats_root = RB_ROOT;
 int name_stats_count = 0;
 
-/* MOVEME */
-static inline void rb_destroy(struct rb_root *root, size_t offset, void (*dtor)(void*))
-{
-  struct rb_node *node = root->rb_node;
-  *root = RB_ROOT;
-
-  while (node != 0) {
-    if (node->rb_left != 0) {
-      struct rb_node *left_child = node->rb_left;
-      node->rb_left = 0;
-      node = left_child;
-    } else if (node->rb_right != 0) {
-      struct rb_node *right_child = node->rb_right;
-      node->rb_right = 0;
-      node = right_child;
-    } else {
-      void *container = ((char*) node) - offset;
-      node = rb_parent(node);
-      if (dtor != NULL)
-        (*dtor)(container);
-    }
-  }
-}
-
 static void account(const char *addr, long wr, long rd, long reqs)
 {
   struct addr_cache *cache = NULL;

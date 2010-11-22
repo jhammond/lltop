@@ -228,7 +228,7 @@ int main(int argc, char *argv[])
   }
 
 #ifdef DEBUG
-  /* TODO rb_destroy(&name_stats_root, offsetof(struct name_stats, ns_node), &free); */
+  rb_destroy(&name_stats_root, offsetof(struct name_stats, ns_node), &free);
 #endif
 
   return 0;

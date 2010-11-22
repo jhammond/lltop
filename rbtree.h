@@ -92,11 +92,8 @@ static inline struct page * rb_insert_page_cache(struct inode * inode,
 }
 -----------------------------------------------------------------------
 */
-
-#define container_of(ptr, type, mbr) ({            \
-      const typeof(((type*) 0)->mbr) *__m = (ptr); \
-      (type*) ((char*) __m - offsetof(type, mbr)); \
-    })
+#include <stddef.h>
+#include <sys/types.h> /* For size_t. */
 
 struct rb_node {
 	unsigned long  rb_parent_color;
@@ -110,6 +107,12 @@ struct rb_node {
 struct rb_root {
 	struct rb_node *rb_node;
 };
+
+/* rb_entry is just container_of */
+#define	rb_entry(ptr, type, member) ({                \
+      const typeof(((type*) 0)->member) *__m = (ptr); \
+      (type*) ((char*) __m - offsetof(type, member)); \
+    })
 
 #define rb_parent(r)   ((struct rb_node *)((r)->rb_parent_color & ~3))
 #define rb_color(r)   ((r)->rb_parent_color & 1)
@@ -128,7 +131,6 @@ static inline void rb_set_color(struct rb_node *rb, int color)
 }
 
 #define RB_ROOT	((struct rb_root) { .rb_node = 0 })
-#define	rb_entry(ptr, type, member) container_of(ptr, type, member)
 
 #define RB_EMPTY_ROOT(root)	((root)->rb_node == 0)
 #define RB_EMPTY_NODE(node)	(rb_parent(node) != node)
@@ -154,6 +156,29 @@ static inline void rb_link_node(struct rb_node * node, struct rb_node * parent,
 	node->rb_left = node->rb_right = 0;
 
 	*rb_link = node;
+}
+
+static inline void rb_destroy(struct rb_root *root, size_t offset, void (*dtor)(void*))
+{
+  struct rb_node *node = root->rb_node;
+  *root = RB_ROOT;
+
+  while (node != 0) {
+    if (node->rb_left != 0) {
+      struct rb_node *left_child = node->rb_left;
+      node->rb_left = 0;
+      node = left_child;
+    } else if (node->rb_right != 0) {
+      struct rb_node *right_child = node->rb_right;
+      node->rb_right = 0;
+      node = right_child;
+    } else {
+      void *container = ((char*) node) - offset;
+      node = rb_parent(node);
+      if (dtor != 0)
+        (*dtor)(container);
+    }
+  }
 }
 
 #endif	/* _LINUX_RBTREE_H */
