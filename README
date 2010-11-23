@@ -44,7 +44,7 @@ returns the differences.  The output of lltop-serv consists of lines
 
 where
 
-  <ipv4-addr>@@<lnet-net-name> is the client name according to the
+  <ipv4-addr>@<lnet-net-name> is the client name according to the
   server, for example 192.0.32.10@tcp,
   <wr_B> and <rd_B> are the number of bytes written and read,
   <reqs> is the number of request other than pings[5].

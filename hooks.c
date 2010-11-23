@@ -71,6 +71,7 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
     { "no-header",  0, 0, 'n' }, /* no_header */
     { "ssh",        1, 0, 'r' }, /* lltop_ssh_path */
     { "lltop-serv", 1, 0, 's' }, /* lltop_serv_path */
+    /* TODO sge_execd_spool_path */
     /* TODO external_get_serv_list */
     { 0, 0, 0, 0, },
   };
@@ -239,7 +240,7 @@ static int getnameinfo_get_host(const char *addr, char *host, size_t host_size)
 {
   /* Find hostname for addr (a dotted-quad string) and store in buffer
    * host of size host_size.  Return 0 if host was written, -1
-   * otherwise.  Note thet host_size is the size of the buffer so you
+   * otherwise.  Note that host_size is the size of the buffer so you
    * can safely do snprintf(host, host_size, "%s", very_long_str). */
 
   if (host_size < NI_MAXHOST)
@@ -278,9 +279,9 @@ static int external_get_job(const char *host, char *job, size_t job_size)
 static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size)
 {
   /* Find jobname for host and store in buffer job of size job_size.
-   * Return 0 if job was written, -1 otherwise.  Note that job_size
-   * is the size of the buffer so you can safely do snprintf(job,
-   * job, "%s", very_long_str).
+   * Return 0 if job was written, -1 otherwise.  Note that job_size is
+   * the size of the buffer so you can safely do snprintf(job,
+   * job_size, "%s", very_long_str).
    *
    * This works for the current TACC Ranger SGE setup.  A running job
    * with jobid <job_id> on host <host> is associated with a directory

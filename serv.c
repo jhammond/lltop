@@ -62,6 +62,7 @@ int get_client_stats(const char *cli_name, const char *stats_path, int which)
     long ctr_samples, ctr_sum = 0;
 
     /* XXX Do we need to check ctr_units? */
+    /* XXX Field widths. */
     if (sscanf(line, "%s %ld samples [%*[^]]] %*d %*d %ld",
                ctr_name, &ctr_samples, &ctr_sum) < 2) {
       ERROR("invalid line \"%s\"\n", chop(line, '\n'));
