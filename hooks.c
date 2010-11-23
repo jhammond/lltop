@@ -289,16 +289,14 @@ static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size)
 
   int rc = -1;
   char *jobs_dir_path = NULL;
-  DIR *jobs_dir = NULL;
-
   asprintf(&jobs_dir_path, "%s/%s/active_jobs", sge_execd_spool_path, host);
 
-  jobs_dir = opendir(jobs_dir_path);
+  DIR *jobs_dir = opendir(jobs_dir_path);
   if (jobs_dir == NULL) {
     /* Cannot find an active_jobs directory for host.  This need not
        be an error. */
     if (errno != ENOENT)
-      FATAL("%s: cannot open %s: %m\n", __func__, jobs_dir_path);
+      ERROR("%s: cannot open %s: %m\n", __func__, jobs_dir_path);
 
     static int sge_access_checked;
     if (!sge_access_checked && access(sge_execd_spool_path, R_OK|X_OK) < 0)

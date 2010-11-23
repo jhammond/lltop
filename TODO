@@ -5,10 +5,12 @@ main.c:
 
 serv.c: 
   Consider scanning /proc/fs/lustre/{mds,obdfilter}/<tgt_name>/exports/<cli_name>/ldlm_stats.
+  ERROR messages should include hostname.
 
 hooks.c:
   Facilitate delegating to external commands.
   The pipeline 
     sed 's/@.*$//' /proc/fs/lustre/osc/<fs_name>-*/*_conn_uuid | sort | uniq
-  could be used to automate lltop_get_serv_list().
+  could be used to automate lltop_get_serv_list(), provided fs_name is
+  mounted on the host where lltop is run.
   Add job owners to output of lltop_print_name_stats().

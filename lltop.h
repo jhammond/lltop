@@ -10,13 +10,17 @@
 #define DEFAULT_LLTOP_INTVL 10
 
 #ifdef DEBUG
-#define ERROR(fmt,arg...) \
-  fprintf(stderr, "%s:(%s:%d:%s) " fmt, program_invocation_short_name, \
-          __FILE__, __LINE__, __func__, ##arg)
+#include <sys/time.h>
+#define ERROR(fmt,arg...) do { \
+  struct timeval _tv; \
+  gettimeofday(&_tv, NULL); \
+  fprintf(stderr, "%s:%s:%d:%s:%ld.%06ld: "fmt, program_invocation_short_name, \
+          __FILE__, __LINE__, __func__, _tv.tv_sec, (long) _tv.tv_usec, ##arg); \
+} while (0)
 #define TRACE ERROR
 #else
 #define ERROR(fmt,arg...) \
-  fprintf(stderr, "%s: " fmt, program_invocation_short_name, ##arg)
+  fprintf(stderr, "%s: "fmt, program_invocation_short_name, ##arg)
 #define TRACE(fmt,arg...) ((void) 0)
 #endif
 

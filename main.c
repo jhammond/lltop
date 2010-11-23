@@ -156,7 +156,8 @@ int main(int argc, char *argv[])
   if (pipe(fdv) < 0)
     FATAL("cannot create pipe for lltop-serv subprocesses: %m\n");
 
-  /* Start lltop-serv on the servers. */
+  TRACE("starting lltop-serv subprocesses\n");
+
   int i;
   for (i = 0; i < serv_count; i++) {
     pid_t pid = fork();
@@ -175,16 +176,22 @@ int main(int argc, char *argv[])
   lltop_free_serv_list(serv_list, serv_count);
   close(fdv[1]);
 
+  TRACE("reading lltop-serv output\n");
+
   FILE *stats_pipe = fdopen(fdv[0], "r");
   if (stats_pipe == NULL)
     FATAL("cannot create pipe: %m\n");
 
-  /* Parse output of lltop-serv. */
   char *line = NULL;
   size_t line_size = 0;
+  int line_count = 0;
+
   while (getline(&line, &line_size, stats_pipe) >= 0) {
     char addr[MAXNAME + 1];
     long wr, rd, reqs;
+
+    if (line_count++ == 0)
+      TRACE("read first line from lltop-serv\n");
 
     /* lltop-serv output is <ipv4-addr>@<net> <wr> <rd> <reqs>. */
     if (sscanf(line, "%"S_MAXNAME"s %ld %ld %ld", addr, &wr, &rd, &reqs) != 4) {
@@ -197,11 +204,15 @@ int main(int argc, char *argv[])
   }
   free(line);
 
+  TRACE("read %d lines from lltop-serv\n", line_count);
+
   if (ferror(stats_pipe))
     ERROR("error reading from pipe: %m\n");
 
   if (fclose(stats_pipe) < 0)
     ERROR("error closing pipe: %m\n");
+
+  TRACE("sorting and printing stats\n");
 
   /* OK, done reading, now sort and print. */
   struct name_stats **stats_vec;
