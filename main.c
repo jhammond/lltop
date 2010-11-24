@@ -150,7 +150,6 @@ int main(int argc, char *argv[])
 
   close(0);
   open("/dev/null", O_RDONLY);
-  signal(SIGCHLD, SIG_IGN);
 
   int fdv[2];
   if (pipe(fdv) < 0)
