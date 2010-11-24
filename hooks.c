@@ -36,23 +36,25 @@ const char *lltop_serv_path = "/usr/local/bin/lltop-serv";
 int (*lltop_get_host)(const char *addr, char *host, size_t host_size);
 int (*lltop_get_job)(const char *host, char *job, size_t job_size);
 
-static const char *external_get_host_path = NULL;
+static int serv_list_from_args = 0;
+
+static const char *get_host_path = NULL;
 static int external_get_host(const char *addr, char *host, size_t host_size);
 
 static int getnameinfo_use_fqdn = 0;
 static int getnameinfo_get_host(const char *addr, char *host, size_t host_size);
 
-static const char *external_get_job_path = NULL;
+static const char *get_job_path = NULL;
 static int external_get_job(const char *host, char *job, size_t job_size);
 
 static const char *sge_execd_spool_path = "/share/sge6.2/execd_spool";
 static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size);
 
-int print_header = 1;
+static int print_header = 1;
 
-static int lltop_usage(void)
+static int usage(void)
 {
-  ERROR("usage: %s fs_name\n", program_invocation_short_name);
+  fprintf(stderr, "usage: %s <fs-name>\n", program_invocation_short_name);
   /* TODO List options. */
   exit(1);
 }
@@ -63,27 +65,33 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
   lltop_get_job = &sge_execd_spool_get_job;
 
   struct option opts[] = {
-    { "use-fqdn",   0, 0, 'f' }, /* getnameinfo_use_fqdn */
-    { "help",       0, 0, 'h' }, /* lltop_usgae() */
+    { "fqdn",       0, 0, 'f' }, /* Set getnameinfo_use_fqdn. */
+    { "get-host",   1, 0, 'g' }, /* get_host_path */
+    /* TODO no-get-host */
+    { "help",       0, 0, 'h' }, /* usage() */
     { "interval",   1, 0, 'i' }, /* lltop_intvl */
-    { "get-job",    1, 0, 'j' }, /* external_get_job_path */
-    { "get-host",   1, 0, 'k' }, /* external_get_host_path */
-    { "no-header",  0, 0, 'n' }, /* no_header */
+    { "get-job",    1, 0, 'j' }, /* get_job_path */
+    /* TODO no-get-job */
+    { "serv-list",  0, 0, 'l' }, /* Set serv_list_from_args. */
+    { "no-header",  0, 0, 'n' }, /* Unset print_header. */
     { "ssh",        1, 0, 'r' }, /* lltop_ssh_path */
     { "lltop-serv", 1, 0, 's' }, /* lltop_serv_path */
     /* TODO sge_execd_spool_path */
-    /* TODO external_get_serv_list */
     { 0, 0, 0, 0, },
   };
 
   int c;
-  while ((c = getopt_long(argc, argv, "fhi:j:k:nr:s:", opts, 0)) != -1) {
+  while ((c = getopt_long(argc, argv, "fg:hi:j:lnr:s:", opts, 0)) != -1) {
     switch (c) {
     case 'f':
       getnameinfo_use_fqdn = 1;
       break;
+    case 'g':
+      get_host_path = optarg;
+      lltop_get_host = &external_get_host;
+      break;
     case 'h':
-      lltop_usage();
+      usage();
       break;
     case 'i':
       lltop_intvl = atoi(optarg);
@@ -91,12 +99,11 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
         FATAL("invalid sleep interval \"%s\"\n", optarg);
       break;
     case 'j':
-      external_get_job_path = optarg;
+      get_job_path = optarg;
       lltop_get_job = &external_get_job;
       break;
-    case 'k':
-      external_get_host_path = optarg;
-      lltop_get_host = &external_get_host;
+    case 'l':
+      serv_list_from_args = 1;
       break;
     case 'n':
       print_header = 0;
@@ -112,12 +119,15 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
     }
   }
 
-  const char *fs_name = argv[optind];
-  if (optind == argc || fs_name == NULL)
-    FATAL("usage: %s fs_name\n", program_invocation_short_name);
+  if (optind >= argc)
+    usage();
 
-  if (lltop_get_serv_list(fs_name, serv_list, serv_count) < 0)
-    FATAL("cannot get server list for %s: %m\n", fs_name);
+  if (serv_list_from_args) {
+    *serv_list = argv + optind;
+    *serv_count = argc - optind;
+  } else if (lltop_get_serv_list(argv[optind], serv_list, serv_count) < 0) {
+    FATAL("cannot get server list for %s: %m\n", argv[optind]);
+  }
 
   return 0;
 }
@@ -169,6 +179,8 @@ void lltop_free_serv_list(char **serv_list, int serv_count)
 {
   /* Clean up the server list gotten by the last function.  Utterly
    * pointless since we'll be exiting soon anyway. */
+  if (serv_list_from_args)
+    return;
 
   int i;
   for (i = 0; i < serv_count; i++)
@@ -233,7 +245,7 @@ static int command(const char *path, const char *arg, char *buf, size_t buf_size
 
 static int external_get_host(const char *addr, char *host, size_t host_size)
 {
-  return command(external_get_host_path, addr, host, host_size);
+  return command(get_host_path, addr, host, host_size);
 }
 
 static int getnameinfo_get_host(const char *addr, char *host, size_t host_size)
@@ -254,7 +266,7 @@ static int getnameinfo_get_host(const char *addr, char *host, size_t host_size)
   }
 
   int ni_rc = getnameinfo((const struct sockaddr*) &sin, sizeof(sin),
-                      host, host_size, NULL, 0, NI_NAMEREQD);
+                          host, host_size, NULL, 0, NI_NAMEREQD);
   if (ni_rc != 0) {
     if (ni_rc != EAI_NONAME)
       ERROR("%s: cannot get name info for address \"%s\": %s\n", __func__,
@@ -273,7 +285,7 @@ static int getnameinfo_get_host(const char *addr, char *host, size_t host_size)
 
 static int external_get_job(const char *host, char *job, size_t job_size)
 {
-  return command(external_get_job_path, host, job, job_size);
+  return command(get_job_path, host, job, job_size);
 }
 
 static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size)
