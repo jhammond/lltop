@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define MAXNAME 1024
 #define DEFAULT_LLTOP_INTVL 10
 
 #ifdef DEBUG

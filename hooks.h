@@ -2,8 +2,6 @@
 #define _HOOKS_H_
 #include <stdio.h>
 
-#define MAXNAME 1024
-
 extern int lltop_intvl;
 extern const char *lltop_ssh_path;
 extern const char *lltop_serv_path;
