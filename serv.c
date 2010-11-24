@@ -174,6 +174,8 @@ int main(int argc, char *argv[])
     OSS_FILTER_PATH,
   };
 
+  TRACE("scanning stats files\n");
+
   int which, type, found = 0;
   for (which = 0; which < 2; which++) {
     for (type = 0; type < 2; type++) {
@@ -207,6 +209,8 @@ int main(int argc, char *argv[])
       sleep(intvl);
     }
   }
+
+  TRACE("done scanning stats files\n");
 
   struct rb_node *node;
   for (node = rb_first(&name_stats_root); node != NULL; node = rb_next(node)) {
