@@ -37,6 +37,7 @@ int (*lltop_get_host)(const char *addr, char *host, size_t host_size);
 int (*lltop_get_job)(const char *host, char *job, size_t job_size);
 
 static int serv_list_from_args = 0;
+static int get_serv_list(const char *fs_name, char ***serv_list, int *serv_count);
 
 static const char *get_host_path = NULL;
 static int external_get_host(const char *addr, char *host, size_t host_size);
@@ -125,14 +126,14 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
   if (serv_list_from_args) {
     *serv_list = argv + optind;
     *serv_count = argc - optind;
-  } else if (lltop_get_serv_list(argv[optind], serv_list, serv_count) < 0) {
+  } else if (get_serv_list(argv[optind], serv_list, serv_count) < 0) {
     FATAL("cannot get server list for %s: %m\n", argv[optind]);
   }
 
   return 0;
 }
 
-int lltop_get_serv_list(const char *fs_name, char ***serv_list, int *serv_count)
+static int get_serv_list(const char *fs_name, char ***serv_list, int *serv_count)
 {
   /* Get the server list for filesystem named fs_name and store in
    * *serv_list, assigning its length in *serv_count.
