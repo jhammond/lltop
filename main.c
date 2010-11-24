@@ -185,6 +185,9 @@ int main(int argc, char *argv[])
   size_t line_size = 0;
   int line_count = 0;
 
+  char sscanf_fmt[80];
+  snprintf(sscanf_fmt, sizeof(sscanf_fmt), "%%%ds %%ld %%ld %%ld", MAXNAME);
+
   while (getline(&line, &line_size, stats_pipe) >= 0) {
     char addr[MAXNAME + 1];
     long wr, rd, reqs;
@@ -193,7 +196,7 @@ int main(int argc, char *argv[])
       TRACE("read first line from lltop-serv\n");
 
     /* lltop-serv output is <ipv4-addr>@<net> <wr> <rd> <reqs>. */
-    if (sscanf(line, "%"S_MAXNAME"s %ld %ld %ld", addr, &wr, &rd, &reqs) != 4) {
+    if (sscanf(line, sscanf_fmt, addr, &wr, &rd, &reqs) != 4) {
       ERROR("invalid line \"%s\"\n", chop(line, '\n'));
       continue;
     }

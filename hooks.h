@@ -3,7 +3,6 @@
 #include <stdio.h>
 
 #define MAXNAME 1024
-#define S_MAXNAME "1024"
 
 extern int lltop_intvl;
 extern const char *lltop_ssh_path;
