@@ -27,8 +27,10 @@
 #include "lltop.h"
 #include "rbtree.h"
 
-#define MDS_FILTER_PATH "/proc/fs/lustre/mds"
-#define OSS_FILTER_PATH "/proc/fs/lustre/obdfilter"
+const char *filter_path[2] = {
+  "/proc/fs/lustre/mds",
+  "/proc/fs/lustre/obdfilter",
+};
 
 struct name_stats {
   struct rb_node ns_node;
@@ -38,11 +40,14 @@ struct name_stats {
 
 struct rb_root name_stats_root = RB_ROOT;
 
-int get_client_stats(const char *cli_name, const char *stats_path, int which)
+int get_client_stats(const char *cli_name, int which)
 {
   /* Parameter which is 0 or 1 depending on which pass we are in.  If
    * which is 0 then subtract wr/rd/reqs from stats, otherwise add. */
-  TRACE("cli_name %s, stats_path %s, which %d\n", cli_name, stats_path, which);
+  TRACE("cli_name %s, which %d\n", cli_name, which);
+
+  char stats_path[80];
+  snprintf(stats_path, sizeof(stats_path), "%s/stats", cli_name);
 
   FILE* stats_file = fopen(stats_path, "r");
   if (stats_file == NULL) {
@@ -50,20 +55,20 @@ int get_client_stats(const char *cli_name, const char *stats_path, int which)
     return -1;
   }
 
-  long wr = 0, rd = 0, reqs = 0;
   char *line = NULL;
   size_t line_size = 0;
 
   /* Skip first line with its busted snapshot_time. */
   getline(&line, &line_size, stats_file);
 
+  long wr = 0, rd = 0, reqs = 0;
+
   while (getline(&line, &line_size, stats_file) >= 0) {
     char ctr_name[80];
     long ctr_samples, ctr_sum = 0;
 
     /* XXX Do we need to check ctr_units? */
-    /* XXX Field widths. */
-    if (sscanf(line, "%s %ld samples [%*[^]]] %*d %*d %ld",
+    if (sscanf(line, "%79s %ld samples [%*[^]]] %*d %*d %ld",
                ctr_name, &ctr_samples, &ctr_sum) < 2) {
       ERROR("invalid line \"%s\"\n", chop(line, '\n'));
       continue;
@@ -115,29 +120,28 @@ int get_client_stats(const char *cli_name, const char *stats_path, int which)
   return 0;
 }
 
-int get_target_stats(const char *tgt_dir_path, int which)
+int get_target_stats(const char *tgt_name, int which)
 {
-  /* tgt_dir_path is /proc/fs/lustre/{mds,obdfilter}/<tgt_name> */
-  TRACE("tgt_dir_path %s, which %d\n", tgt_dir_path, which);
+  TRACE("tgt_name %s, which %d\n", tgt_name, which);
 
-  char exp_dir_path[4096], stats_path[4096];
-  snprintf(exp_dir_path, 4096, "%s/exports", tgt_dir_path);
+  char exp_dir_path[80];
+  snprintf(exp_dir_path, sizeof(exp_dir_path), "%s/exports", tgt_name);
 
-  DIR *dir = opendir(exp_dir_path);
-  if (dir == NULL) {
+  if (chdir(exp_dir_path) < 0) {
     ERROR("cannot open %s: %m\n", exp_dir_path);
     return -1;
   }
 
+  DIR *exp_dir = opendir(".");
+  if (exp_dir == NULL)
+    FATAL("cannot open %s: %m\n", exp_dir_path);
+
   struct dirent *ent;
-  while ((ent = readdir(dir))) {
-    if (ent->d_type == DT_DIR && ent->d_name[0] != '.') {
-      char *cli_name = ent->d_name;
-      snprintf(stats_path, 4096, "%s/%s/stats", exp_dir_path, cli_name);
-      get_client_stats(cli_name, stats_path, which);
-    }
+  while ((ent = readdir(exp_dir)) != NULL) {
+    if (ent->d_type == DT_DIR && ent->d_name[0] != '.')
+      get_client_stats(ent->d_name, which);
   }
-  closedir(dir);
+  closedir(exp_dir);
 
   return 0;
 }
@@ -169,31 +173,25 @@ int main(int argc, char *argv[])
    * break up writes, but it seems to work. */
   setlinebuf(stdout);
 
-  const char *filter_path[2] = {
-    MDS_FILTER_PATH,
-    OSS_FILTER_PATH,
-  };
-
   TRACE("scanning stats files\n");
 
   int which, type, found = 0;
   for (which = 0; which < 2; which++) {
     for (type = 0; type < 2; type++) {
-      if (chdir(filter_path[type]) < 0) {
+      DIR *dir = opendir(filter_path[type]);
+      if (dir == NULL) {
         if (errno != ENOENT)
           FATAL("cannot open %s: %m\n", filter_path[type]);
         continue;
       }
       found++;
 
-      DIR *dir = opendir(".");
-      if (dir == NULL)
-        FATAL("cannot open %s: %m\n", filter_path[type]);
-
       struct dirent *ent;
-      while ((ent = readdir(dir))) {
-        if (ent->d_type == DT_DIR && ent->d_name[0] != '.')
+      while ((ent = readdir(dir)) != NULL) {
+        if (ent->d_type == DT_DIR && ent->d_name[0] != '.') {
+          chdir(filter_path[type]);
           get_target_stats(ent->d_name, which);
+        }
       }
       closedir(dir);
     }
