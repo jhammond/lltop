@@ -32,7 +32,7 @@
 
 int lltop_intvl = DEFAULT_LLTOP_INTVL;
 const char *lltop_ssh_path = "/usr/bin/ssh";
-const char *lltop_serv_path = "/usr/local/bin/lltop-serv";
+const char *lltop_serv_path = "lltop-serv";
 int (*lltop_get_host)(const char *addr, char *host, size_t host_size);
 int (*lltop_get_job)(const char *host, char *job, size_t job_size);
 
@@ -48,41 +48,58 @@ static int getnameinfo_get_host(const char *addr, char *host, size_t host_size);
 static const char *get_job_path = NULL;
 static int external_get_job(const char *host, char *job, size_t job_size);
 
-static const char *sge_execd_spool_path = "/share/sge6.2/execd_spool";
-static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size);
+static const char *execd_spool_path = "/share/sge6.2/execd_spool";
+static int execd_spool_get_job(const char *host, char *job, size_t job_size);
 
 static int print_header = 1;
 
 static int usage(void)
 {
-  fprintf(stderr, "usage: %s <fs-name>\n", program_invocation_short_name);
-  /* TODO List options. */
+  fprintf(stderr,
+          "Usage: %s [OPTION]... FILESYSTEM\n"
+          "  or:  %s [OPTION]... -l SERVER...\n"
+          "Report load by job for Lustre FILESYSTEM or SERVER(s).\n"
+          "\n"
+          "Mandatory arguments to long options are mandatory for short options too.\n"
+          "  -f, --fqdn              use fully qualified domain names for clients\n"
+          "  -g, --get-host=COMMAND  use COMMAND for reverse DNS lookups\n"
+          "  -h, --help              display this help and exit\n"
+          "  -i, --interval=NUMBER   report usage over NUMBER seconds\n"
+          "  -j, --get-job=COMMAND   use COMMAND for job lookup\n"
+          "  -l, --server-list       report load on servers given as non-option arguments\n"
+          "      --no-header         do not display header\n"
+          "      --lltop-serv=PATH   use lltop-serv located at PATH on servers\n"
+          "      --ssh=COMMAND       use COMMAND to execute lltop-serv on servers\n"
+          "      --execd-spool=PATH  use execd_spool directory PATH for job lookup\n"
+          /* TODO Report bugs to ... */
+          /* TODO lltop home page: <http://>\n. */
+          ,
+          program_invocation_short_name,
+          program_invocation_short_name);
   exit(1);
 }
 
 int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
 {
   lltop_get_host = &getnameinfo_get_host;
-  lltop_get_job = &sge_execd_spool_get_job;
+  lltop_get_job = &execd_spool_get_job;
 
   struct option opts[] = {
-    { "fqdn",       0, 0, 'f' }, /* Set getnameinfo_use_fqdn. */
-    { "get-host",   1, 0, 'g' }, /* get_host_path */
-    /* TODO no-get-host */
-    { "help",       0, 0, 'h' }, /* usage() */
-    { "interval",   1, 0, 'i' }, /* lltop_intvl */
-    { "get-job",    1, 0, 'j' }, /* get_job_path */
-    /* TODO no-get-job */
-    { "serv-list",  0, 0, 'l' }, /* Set serv_list_from_args. */
-    { "no-header",  0, 0, 'n' }, /* Unset print_header. */
-    { "ssh",        1, 0, 'r' }, /* lltop_ssh_path */
-    { "lltop-serv", 1, 0, 's' }, /* lltop_serv_path */
-    /* TODO sge_execd_spool_path */
+    { "fqdn",        0, 0, 'f' }, /* Set getnameinfo_use_fqdn. */
+    { "get-host",    1, 0, 'g' }, /* get_host_path */
+    { "help",        0, 0, 'h' }, /* Call usage(). */
+    { "interval",    1, 0, 'i' }, /* lltop_intvl */
+    { "get-job",     1, 0, 'j' }, /* get_job_path */
+    { "server-list", 0, 0, 'l' }, /* Set serv_list_from_args. */
+    { "no-header",   0, &print_header, 0 }, /* Unset print_header. */
+    { "lltop-serv",  1, 0, 256 }, /* lltop_serv_path */
+    { "ssh",         1, 0, 257 }, /* lltop_ssh_path */
+    { "execd-spool", 1, 0, 258 },
     { 0, 0, 0, 0, },
   };
 
   int c;
-  while ((c = getopt_long(argc, argv, "fg:hi:j:lnr:s:", opts, 0)) != -1) {
+  while ((c = getopt_long(argc, argv, "fg:hi:j:l", opts, 0)) != -1) {
     switch (c) {
     case 'f':
       getnameinfo_use_fqdn = 1;
@@ -106,16 +123,18 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
     case 'l':
       serv_list_from_args = 1;
       break;
-    case 'n':
-      print_header = 0;
-      break;
-    case 'r':
-      lltop_ssh_path = optarg;
-      break;
-    case 's':
+    case 256:
       lltop_serv_path = optarg;
       break;
+    case 257:
+      lltop_ssh_path = optarg;
+      break;
+    case 258:
+      execd_spool_path = optarg;
+      lltop_get_job = &execd_spool_get_job;
+      break;
     case '?':
+      FATAL("unknown option `-%c'\n", optopt);
       break;
     }
   }
@@ -289,7 +308,7 @@ static int external_get_job(const char *host, char *job, size_t job_size)
   return command(get_job_path, host, job, job_size);
 }
 
-static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size)
+static int execd_spool_get_job(const char *host, char *job, size_t job_size)
 {
   /* Find jobname for host and store in buffer job of size job_size.
    * Return 0 if job was written, -1 otherwise.  Note that job_size is
@@ -302,7 +321,7 @@ static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size)
 
   int rc = -1;
   char *jobs_dir_path = NULL;
-  asprintf(&jobs_dir_path, "%s/%s/active_jobs", sge_execd_spool_path, host);
+  asprintf(&jobs_dir_path, "%s/%s/active_jobs", execd_spool_path, host);
 
   DIR *jobs_dir = opendir(jobs_dir_path);
   if (jobs_dir == NULL) {
@@ -311,10 +330,10 @@ static int sge_execd_spool_get_job(const char *host, char *job, size_t job_size)
     if (errno != ENOENT)
       ERROR("%s: cannot open %s: %m\n", __func__, jobs_dir_path);
 
-    static int sge_access_checked;
-    if (!sge_access_checked && access(sge_execd_spool_path, R_OK|X_OK) < 0)
-      ERROR("%s: cannot open %s: %m\n", __func__, sge_execd_spool_path);
-    sge_access_checked = 1;
+    static int access_checked;
+    if (!access_checked && access(execd_spool_path, R_OK|X_OK) < 0)
+      ERROR("%s: cannot access %s: %m\n", __func__, execd_spool_path);
+    access_checked = 1;
     goto out;
   }
 
