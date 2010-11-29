@@ -74,7 +74,8 @@ static int usage(void)
           "\n"
           /* TODO Describe function, document default argument values. */
           /* TODO "Report lltop bugs to ...\n" */
-          "lltop home page: <http://users.ices.utexas.edu/~jhammond/lltop/>\n");
+          "lltop home page: <http://users.ices.utexas.edu/~jhammond/lltop/>\n"
+          "lltop GitHub repository: <https://github.com/jhammond/lltop>\n");
   exit(1);
 }
 
@@ -133,15 +134,14 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
       lltop_get_job = &execd_spool_get_job;
       break;
     case '?':
-      fprintf(stderr, "Try `%s --help' for more information.\n", program_invocation_short_name);
+      fprintf(stderr, "Try `lltop --help' for more information.\n");
       exit(1);
     }
   }
 
   if (optind >= argc)
     FATAL("missing filesystem or server list argument(s)\n"
-          "Try `%s --help' for more information.\n",
-          program_invocation_short_name);
+          "Try `lltop --help' for more information.\n");
 
   if (serv_list_from_args) {
     *serv_list = argv + optind;
@@ -238,7 +238,7 @@ static int command(const char *path, const char *arg, char *buf, size_t buf_size
   asprintf(&cmd, "%s %s", path, arg);
   pipe = popen(cmd, "r");
   if (pipe == NULL) {
-    ERROR("cannot execute %s: %m\n", cmd);
+    ERROR("cannot execute '%s': %m\n", cmd);
     goto out;
   }
 
