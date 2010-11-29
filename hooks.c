@@ -56,26 +56,25 @@ static int print_header = 1;
 static int usage(void)
 {
   fprintf(stderr,
-          "Usage: %s [OPTION]... FILESYSTEM\n"
-          "  or:  %s [OPTION]... -l SERVER...\n"
+          "Usage: lltop [OPTION]... FILESYSTEM\n"
+          "  or:  lltop [OPTION]... -l SERVER...\n"
           "Report load by job for Lustre FILESYSTEM or SERVER(s).\n"
           "\n"
           "Mandatory arguments to long options are mandatory for short options too.\n"
-          "  -f, --fqdn              use fully qualified domain names for clients\n"
-          "  -g, --get-host=COMMAND  use COMMAND for reverse DNS lookups\n"
-          "  -h, --help              display this help and exit\n"
-          "  -i, --interval=NUMBER   report usage over NUMBER seconds\n"
-          "  -j, --get-job=COMMAND   use COMMAND for job lookup\n"
-          "  -l, --server-list       report load on servers given as non-option arguments\n"
-          "      --no-header         do not display header\n"
-          "      --lltop-serv=PATH   use lltop-serv located at PATH on servers\n"
-          "      --ssh=COMMAND       use COMMAND to execute lltop-serv on servers\n"
-          "      --execd-spool=PATH  use execd_spool directory PATH for job lookup\n"
-          /* TODO Report bugs to ... */
-          /* TODO lltop home page: <http://>\n. */
-          ,
-          program_invocation_short_name,
-          program_invocation_short_name);
+          "  -f, --fqdn               use fully qualified domain names for clients\n"
+          "  -g, --get-host=COMMAND   use COMMAND for reverse DNS lookups\n"
+          "  -h, --help               display this help and exit\n"
+          "  -i, --interval=NUMBER    report load over NUMBER seconds\n"
+          "  -j, --get-job=COMMAND    use COMMAND for job lookup\n"
+          "  -l, --server-list        report load on servers given as arguments\n"
+          "      --no-header          do not display header\n"
+          "      --lltop-serv=PATH    use lltop-serv at PATH on servers\n"
+          "      --remote-shell=PATH  use remote shell at PATH to execute lltop-serv\n"
+          "      --execd-spool=PATH   use execd_spool directory PATH for job lookup\n"
+          "\n"
+          /* TODO Describe function, document default argument values. */
+          /* TODO "Report lltop bugs to ...\n" */
+          "lltop home page: <http://users.ices.utexas.edu/~jhammond/lltop/>\n");
   exit(1);
 }
 
@@ -134,13 +133,15 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
       lltop_get_job = &execd_spool_get_job;
       break;
     case '?':
-      FATAL("unknown option `-%c'\n", optopt);
-      break;
+      fprintf(stderr, "Try `%s --help' for more information.\n", program_invocation_short_name);
+      exit(1);
     }
   }
 
   if (optind >= argc)
-    usage();
+    FATAL("missing filesystem or server list argument(s)\n"
+          "Try `%s --help' for more information.\n",
+          program_invocation_short_name);
 
   if (serv_list_from_args) {
     *serv_list = argv + optind;
