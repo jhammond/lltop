@@ -169,7 +169,7 @@ int main(int argc, char *argv[])
       close(fdv[1]);
       execl(lltop_ssh_path, lltop_ssh_path, serv_list[i],
             lltop_serv_path, intvl_arg, (char*) NULL);
-      FATAL("cannot exec: %m\n"); /* XXX Cannot exec what? */
+      FATAL("cannot exec '%s': %m\n", lltop_ssh_path);
     }
   }
   lltop_free_serv_list(serv_list, serv_count);
