@@ -16,6 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
  * 02110-1301 USA.
  */
+/* TODO Consider scanning /proc/fs/lustre/{mds,obdfilter}/<tgt_name>/exports/<cli_name>/ldlm_stats. */
+/* TODO Error messages should include hostname. */
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <getopt.h>
