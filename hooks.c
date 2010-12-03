@@ -168,9 +168,9 @@ static int get_serv_list(const char *fs_name, char ***serv_list, int *serv_count
    * servers.  For eaxmple, scratch is mds3, mds4, oss23,..., oss72.
    * Pretty gross, huh? */
 
-  int scratch_r[] = {  3,  4, 23, 72, };
-  int share_r[]   = {  1,  2,  1,  6, };
-  int work_r[]    = {  5,  6,  7, 20, };
+  int scratch_r[] = {  3,  3, 23, 72, };
+  int share_r[]   = {  1,  1,  1,  6, };
+  int work_r[]    = {  5,  5,  7, 20, };
 
   int *fs_r;
   if (strcmp(fs_name, "scratch") == 0)
