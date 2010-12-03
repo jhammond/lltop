@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# tacc_lltop: TACC lltop wrapper, passes all options to lltop, queries
+# SGE for job owner and workdir, appends to lltop output:
+#
+#  JOBID               WR_MB    RD_MB     REQS      OWNER WORKDIR
+#  12345                2835        0     6105      alice /work/99999/alice/jumble
+#  login3               2065     2482    11173            
+#  1687244              1335        0     2980        bob /work/99995/bob/sudoku-solvr
+#  i101-101               23        0       17
+#  ...
+
+if [ $UID -ne 0 ]; then
+    echo "$(basename $0): must be run as root"
+    exit 1
+fi
+
+lltop "$@" | \
+while read name wr_mb rd_mb reqs; do
+    case $name in
+        JOBID)
+            # Header: add owner and workdir labels.
+            owner="OWNER"
+            workdir="WORKDIR"
+            ;;
+        [0-9]*)
+            # Job: get job owner and workdir from qstat.
+            qstat=$(qstat -j "$name" 2> /dev/null)
+            owner=$(awk '$1 == "owner:" { print $2 }' <<< "$qstat")
+            workdir=$(awk '$1 == "sge_o_workdir:" { print $2 }' <<< "$qstat")
+            ;;
+        *)
+            # Non-job.
+            owner=""
+            workdir=""
+            ;;
+    esac
+    printf "%-16s %8s %8s %8s %10s %s\n" $name $wr_mb $rd_mb $reqs $owner $workdir
+done

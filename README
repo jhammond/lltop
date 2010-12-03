@@ -1,17 +1,18 @@
                                *Lltop*
 
-Lltop[0] is a command line utility for HPC cluster administrators
-which combines per-client I/O statistics from Lustre[1] filesystem
-servers, with job assignment data from cluster batch schedulers, to
-give a job-by-job accounting of filesystem load.  Under typical usage,
-lltop is invoked with the name of a filesystem, runs for a
-configurable interval (10 seconds say), and outputs a table
-summarizing I/O and RPC loads indexed by job identifier; for example:
+Lltop[0] is a command line utility which gathers I/O statistics from
+Lustre[1] filesystem servers, along with job assignment data from
+cluster batch schedulers, to give a job-by-job accounting of
+filesystem load.  Under typical usage, lltop is invoked with the name
+of a filesystem, runs for a configurable interval (10 seconds say),
+and outputs a table summarizing I/O and RPC loads indexed by job
+identifier; for example:
 
-  $ lltop share
+  $ lltop work
   JOB      WR_MB    RD_MB    REQS      OWNER  WORKDIR
-  12101    15925    67630  133694   jfourier  /share/jfourier/fftw_run
-  10322     2254     1027    2504     claude  /share/claude/viscous-flow
+  12101    15925    67630  133694   jfourier  /work/jfourier/fftw_run
+  10322     2254     1027    2504     claude  /work/claude/viscous-flow-08
+  13007      756    21024   10007     ludwig  /work/ludwig/boltzeq.mvapich2
   ...
 
 Normally, lltop is run in response to observations of excessive load
@@ -127,7 +128,9 @@ This is the default method in lltop.  Otherwise:
                           *Installing lltop*
 
 Run make, put lltop somewhere in your path on an admin node, put
-lltop-serv somewhere in your path on the Lustre servers.
+lltop-serv somewhere in your path on the Lustre servers.  Also see the
+included script tacc_lltop which we use to add job owner and workdir
+to the output of lltop.
 
                             *Getting Help*
 
@@ -151,8 +154,10 @@ Mandatory arguments to long options are mandatory for short options too.
 lltop home page: <http://users.ices.utexas.edu/~jhammond/lltop/>
 lltop GitHub repository: <https://github.com/jhammond/lltop>
 
-Otherwise, please send me any comments, questions, improvements.
-Please, put lltop in the subject line.
+Otherwise, please send me any comments, questions, improvements.  I am
+especially interested in receiving/including any code/scripts to do
+job lookup for batch schedulers other than SGE.  Please, put lltop in
+the subject line.
 
 John L. Hammond
 ICES, The University of Texas at Austin
