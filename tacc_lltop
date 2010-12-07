@@ -10,6 +10,12 @@
 #  i101-101               23        0       17
 #  ...
 
+if [ $# -eq 0 ]; then
+    echo "$(basename $0): must specify a filesystem"
+    echo "Try $(basename $0) scratch|share|work, or pass --help for more information."
+    exit 1
+fi
+
 if [ $UID -ne 0 ]; then
     echo "$(basename $0): must be run as root"
     exit 1
