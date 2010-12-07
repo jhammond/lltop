@@ -35,6 +35,7 @@ const char *lltop_ssh_path = "/usr/bin/ssh";
 const char *lltop_serv_path = "lltop-serv";
 int (*lltop_get_host)(const char *addr, char *host, size_t host_size);
 int (*lltop_get_job)(const char *host, char *job, size_t job_size);
+int (*lltop_job_map)(void);
 
 static int serv_list_from_args = 0;
 static int get_serv_list(const char *fs_name, char ***serv_list, int *serv_count);
@@ -50,6 +51,9 @@ static int external_get_job(const char *host, char *job, size_t job_size);
 
 static const char *execd_spool_path = "/share/sge6.2/execd_spool";
 static int execd_spool_get_job(const char *host, char *job, size_t job_size);
+
+static const char *job_map_cmd = NULL;
+static int external_job_map(void);
 
 static int print_header = 1;
 
@@ -67,6 +71,7 @@ static int usage(void)
           "  -i, --interval=NUMBER    report load over NUMBER seconds\n"
           "  -j, --get-job=COMMAND    use COMMAND for job lookup\n"
           "  -l, --server-list        report load on servers given as arguments\n"
+          "  -m, --job-map=COMMAND    use COMMAND to get job map\n"
           "      --no-header          do not display header\n"
           "      --lltop-serv=PATH    use lltop-serv at PATH on servers\n"
           "      --remote-shell=PATH  use remote shell at PATH to execute lltop-serv\n"
@@ -81,25 +86,23 @@ static int usage(void)
 
 int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
 {
-  lltop_get_host = &getnameinfo_get_host;
-  lltop_get_job = &execd_spool_get_job;
-
   struct option opts[] = {
-    { "fqdn",        0, 0, 'f' }, /* Set getnameinfo_use_fqdn. */
-    { "get-host",    1, 0, 'g' }, /* get_host_path */
-    { "help",        0, 0, 'h' }, /* Call usage(). */
-    { "interval",    1, 0, 'i' }, /* lltop_intvl */
-    { "get-job",     1, 0, 'j' }, /* get_job_path */
-    { "server-list", 0, 0, 'l' }, /* Set serv_list_from_args. */
-    { "no-header",   0, &print_header, 0 }, /* Unset print_header. */
-    { "lltop-serv",  1, 0, 256 }, /* lltop_serv_path */
-    { "ssh",         1, 0, 257 }, /* lltop_ssh_path */
-    { "execd-spool", 1, 0, 258 },
+    { "fqdn",         0, 0, 'f' }, /* Set getnameinfo_use_fqdn. */
+    { "get-host",     1, 0, 'g' }, /* get_host_path */
+    { "help",         0, 0, 'h' }, /* Call usage(). */
+    { "interval",     1, 0, 'i' }, /* lltop_intvl */
+    { "get-job",      1, 0, 'j' }, /* get_job_path */
+    { "server-list",  0, 0, 'l' }, /* Set serv_list_from_args. */
+    { "job-map",      1, 0, 'm' }, /* job_map_cmd */
+    { "no-header",    0, &print_header, 0 }, /* Unset print_header. */
+    { "lltop-serv",   1, 0, 256 }, /* lltop_serv_path */
+    { "remote-shell", 1, 0, 257 }, /* lltop_ssh_path */
+    { "execd-spool",  1, 0, 258 },
     { 0, 0, 0, 0, },
   };
 
   int c;
-  while ((c = getopt_long(argc, argv, "fg:hi:j:l", opts, 0)) != -1) {
+  while ((c = getopt_long(argc, argv, "fg:hi:j:lm:", opts, 0)) != -1) {
     switch (c) {
     case 'f':
       getnameinfo_use_fqdn = 1;
@@ -122,6 +125,10 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
       break;
     case 'l':
       serv_list_from_args = 1;
+      break;
+    case 'm':
+      job_map_cmd = optarg;
+      lltop_job_map = &external_job_map;
       break;
     case 256:
       lltop_serv_path = optarg;
@@ -149,6 +156,14 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
   } else if (get_serv_list(argv[optind], serv_list, serv_count) < 0) {
     FATAL("cannot get server list for %s: %m\n", argv[optind]);
   }
+
+  /* BLECH. */
+  if (lltop_get_host == NULL)
+    lltop_get_host = &getnameinfo_get_host;
+
+  /* BLECH. */
+  if (lltop_get_job == NULL && lltop_job_map == NULL)
+    lltop_get_job = &execd_spool_get_job;
 
   return 0;
 }
@@ -357,4 +372,39 @@ static int execd_spool_get_job(const char *host, char *job, size_t job_size)
   free(jobs_dir_path);
 
   return rc;
+}
+
+static int external_job_map(void)
+{
+  int pclose_rc = -1;
+  FILE *pipe = NULL;
+
+  pipe = popen(job_map_cmd, "r");
+  if (pipe == NULL) {
+    ERROR("cannot execute '%s': %m\n", job_map_cmd);
+    return -1;
+  }
+
+  char host[MAXNAME + 1];
+  char job[MAXNAME + 1];
+  /* XXX MAXNAME */
+
+  char *line = NULL;
+  size_t line_size = 0;
+
+  while (getline(&line, &line_size, pipe) >= 0) {
+    if (sscanf(line, "%1024s %1024s\n", host, job) != 2) {
+      ERROR("invalid line \"%s\"\n", chop(line, '\n'));
+      continue;
+    }
+
+    lltop_set_job(host, job);
+  }
+  free(line);
+
+  if ((pclose_rc = pclose(pipe)) < 0)
+    ERROR("cannot obtain termination status of %s: %m\n", job_map_cmd);
+
+  /* XXX We may be returning -1 with errno unset. */
+  return pclose_rc == 0 ? 0 : -1;
 }
