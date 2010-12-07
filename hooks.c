@@ -19,6 +19,7 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +57,7 @@ static const char *job_map_cmd = NULL;
 static int external_job_map(void);
 
 static int print_header = 1;
+static int print_limit = INT_MAX;
 
 static int usage(void)
 {
@@ -72,6 +74,7 @@ static int usage(void)
           "  -j, --get-job=COMMAND    use COMMAND for job lookup\n"
           "  -l, --server-list        report load on servers given as arguments\n"
           "  -m, --job-map=COMMAND    use COMMAND to get job map\n"
+          "  -n, --limit=NUMBER       limit output to NUMBER jobs\n"
           "      --no-header          do not display header\n"
           "      --lltop-serv=PATH    use lltop-serv at PATH on servers\n"
           "      --remote-shell=PATH  use remote shell at PATH to execute lltop-serv\n"
@@ -94,6 +97,7 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
     { "get-job",      1, 0, 'j' }, /* get_job_path */
     { "server-list",  0, 0, 'l' }, /* Set serv_list_from_args. */
     { "job-map",      1, 0, 'm' }, /* job_map_cmd */
+    { "limit",        1, 0, 'n' }, /* print_limit */
     { "no-header",    0, &print_header, 0 }, /* Unset print_header. */
     { "lltop-serv",   1, 0, 256 }, /* lltop_serv_path */
     { "remote-shell", 1, 0, 257 }, /* lltop_ssh_path */
@@ -102,7 +106,7 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
   };
 
   int c;
-  while ((c = getopt_long(argc, argv, "fg:hi:j:lm:", opts, 0)) != -1) {
+  while ((c = getopt_long(argc, argv, "fg:hi:j:lm:n:", opts, 0)) != -1) {
     switch (c) {
     case 'f':
       getnameinfo_use_fqdn = 1;
@@ -129,6 +133,9 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
     case 'm':
       job_map_cmd = optarg;
       lltop_job_map = &external_job_map;
+      break;
+    case 'n':
+      print_limit = atoi(optarg);
       break;
     case 256:
       lltop_serv_path = optarg;
@@ -237,12 +244,17 @@ void lltop_print_header(FILE *file)
 void lltop_print_name_stats(FILE *file, const char *name, long wr_B, long rd_B, long reqs)
 {
   /* Called for each job to be output by lltop.  Note we convert bytes
-   * to MB.  Consider adding job owner (if applicable) to output. */
+   * to MB, and that we don't print if all values would be zero. */
+
+  if (print_limit <= 0)
+    return;
 
   long wr_MB = wr_B >> 20, rd_MB = rd_B >> 20;
 
-  if (wr_MB != 0 || rd_MB != 0 || reqs != 0)
+  if (wr_MB != 0 || rd_MB != 0 || reqs != 0) {
     fprintf(file, "%-16s %8lu %8lu %8lu\n", name, wr_MB, rd_MB, reqs);
+    print_limit--;
+  }
 }
 
 static int command(const char *path, const char *arg, char *buf, size_t buf_size)
