@@ -224,7 +224,10 @@ void lltop_print_name_stats(FILE *file, const char *name, long wr_B, long rd_B, 
   /* Called for each job to be output by lltop.  Note we convert bytes
    * to MB.  Consider adding job owner (if applicable) to output. */
 
-  fprintf(file, "%-16s %8lu %8lu %8lu\n", name, wr_B >> 20, rd_B >> 20, reqs);
+  long wr_MB = wr_B >> 20, rd_MB = rd_B >> 20;
+
+  if (wr_MB != 0 || rd_MB != 0 || reqs != 0)
+    fprintf(file, "%-16s %8lu %8lu %8lu\n", name, wr_MB, rd_MB, reqs);
 }
 
 static int command(const char *path, const char *arg, char *buf, size_t buf_size)
