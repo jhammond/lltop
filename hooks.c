@@ -194,6 +194,10 @@ static int get_serv_list(const char *fs_name, char ***serv_list, int *serv_count
   int share_r[]   = {  1,  1,  1,  6, };
   int work_r[]    = {  5,  5,  7, 20, };
 
+  /* Allow user to specify '/scratch' or 'scratch'. */
+  if (fs_name[0] == '/')
+    fs_name++;
+
   int *fs_r;
   if (strcmp(fs_name, "scratch") == 0)
     fs_r = scratch_r;
