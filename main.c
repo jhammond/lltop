@@ -123,7 +123,7 @@ static struct name_stats *get_host_stats(const char *host)
   struct cache_struct *host_cache;
   char job[MAXNAME + 1];
 
-  if (lltop_get_job_map != NULL) {
+  if (lltop_job_map != NULL) {
     host_cache = lookup(&host_cache_root, host, 0);
     if (host_cache != NULL)
       return host_cache->c_stats;
@@ -253,7 +253,7 @@ int main(int argc, char *argv[])
   lltop_free_serv_list(serv_list, serv_count);
   close(fdv[1]);
 
-  if (lltop_get_job_map != NULL && (*lltop_get_job_map)() < 0)
+  if (lltop_job_map != NULL && (*lltop_job_map)() < 0)
     FATAL("cannot get job map: %m\n");
 
   TRACE("reading lltop-serv output\n");

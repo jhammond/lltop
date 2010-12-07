@@ -35,7 +35,7 @@ const char *lltop_ssh_path = "/usr/bin/ssh";
 const char *lltop_serv_path = "lltop-serv";
 int (*lltop_get_host)(const char *addr, char *host, size_t host_size);
 int (*lltop_get_job)(const char *host, char *job, size_t job_size);
-int (*lltop_get_job_map)(void);
+int (*lltop_job_map)(void);
 
 static int serv_list_from_args = 0;
 static int get_serv_list(const char *fs_name, char ***serv_list, int *serv_count);
@@ -52,8 +52,8 @@ static int external_get_job(const char *host, char *job, size_t job_size);
 static const char *execd_spool_path = "/share/sge6.2/execd_spool";
 static int execd_spool_get_job(const char *host, char *job, size_t job_size);
 
-static const char *get_job_map_cmd = NULL;
-static int external_get_job_map(void);
+static const char *job_map_cmd = NULL;
+static int external_job_map(void);
 
 static int print_header = 1;
 
@@ -65,17 +65,17 @@ static int usage(void)
           "Report load by job for Lustre FILESYSTEM or SERVER(s).\n"
           "\n"
           "Mandatory arguments to long options are mandatory for short options too.\n"
-          "  -f, --fqdn                 use fully qualified domain names for clients\n"
-          "  -g, --get-host=COMMAND     use COMMAND for reverse DNS lookups\n"
-          "  -h, --help                 display this help and exit\n"
-          "  -i, --interval=NUMBER      report load over NUMBER seconds\n"
-          "  -j, --get-job=COMMAND      use COMMAND for job lookup\n"
-          "  -J, --get-job-map=COMMAND  use COMMAND to get job map\n"
-          "  -l, --server-list          report load on servers given as arguments\n"
-          "      --no-header            do not display header\n"
-          "      --lltop-serv=PATH      use lltop-serv at PATH on servers\n"
-          "      --remote-shell=PATH    use remote shell at PATH to execute lltop-serv\n"
-          "      --execd-spool=PATH     use execd_spool directory PATH for job lookup\n"
+          "  -f, --fqdn               use fully qualified domain names for clients\n"
+          "  -g, --get-host=COMMAND   use COMMAND for reverse DNS lookups\n"
+          "  -h, --help               display this help and exit\n"
+          "  -i, --interval=NUMBER    report load over NUMBER seconds\n"
+          "  -j, --get-job=COMMAND    use COMMAND for job lookup\n"
+          "  -l, --server-list        report load on servers given as arguments\n"
+          "  -m, --job-map=COMMAND    use COMMAND to get job map\n"
+          "      --no-header          do not display header\n"
+          "      --lltop-serv=PATH    use lltop-serv at PATH on servers\n"
+          "      --remote-shell=PATH  use remote shell at PATH to execute lltop-serv\n"
+          "      --execd-spool=PATH   use execd_spool directory PATH for job lookup\n"
           "\n"
           /* TODO Describe function, document default argument values. */
           /* TODO "Report lltop bugs to ...\n" */
@@ -92,8 +92,8 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
     { "help",         0, 0, 'h' }, /* Call usage(). */
     { "interval",     1, 0, 'i' }, /* lltop_intvl */
     { "get-job",      1, 0, 'j' }, /* get_job_path */
-    { "get-job-map",  1, 0, 'J' },
     { "server-list",  0, 0, 'l' }, /* Set serv_list_from_args. */
+    { "job-map",      1, 0, 'm' }, /* job_map_cmd */
     { "no-header",    0, &print_header, 0 }, /* Unset print_header. */
     { "lltop-serv",   1, 0, 256 }, /* lltop_serv_path */
     { "remote-shell", 1, 0, 257 }, /* lltop_ssh_path */
@@ -102,7 +102,7 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
   };
 
   int c;
-  while ((c = getopt_long(argc, argv, "fg:hi:j:J:l", opts, 0)) != -1) {
+  while ((c = getopt_long(argc, argv, "fg:hi:j:lm:", opts, 0)) != -1) {
     switch (c) {
     case 'f':
       getnameinfo_use_fqdn = 1;
@@ -123,12 +123,12 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
       get_job_path = optarg;
       lltop_get_job = &external_get_job;
       break;
-    case 'J':
-      get_job_map_cmd = optarg;
-      lltop_get_job_map = &external_get_job_map;
-      break;
     case 'l':
       serv_list_from_args = 1;
+      break;
+    case 'm':
+      job_map_cmd = optarg;
+      lltop_job_map = &external_job_map;
       break;
     case 256:
       lltop_serv_path = optarg;
@@ -162,7 +162,7 @@ int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count)
     lltop_get_host = &getnameinfo_get_host;
 
   /* BLECH. */
-  if (lltop_get_job == NULL && lltop_get_job_map == NULL)
+  if (lltop_get_job == NULL && lltop_job_map == NULL)
     lltop_get_job = &execd_spool_get_job;
 
   return 0;
@@ -371,14 +371,14 @@ static int execd_spool_get_job(const char *host, char *job, size_t job_size)
   return rc;
 }
 
-static int external_get_job_map(void)
+static int external_job_map(void)
 {
   int pclose_rc = -1;
   FILE *pipe = NULL;
 
-  pipe = popen(get_job_map_cmd, "r");
+  pipe = popen(job_map_cmd, "r");
   if (pipe == NULL) {
-    ERROR("cannot execute '%s': %m\n", get_job_map_cmd);
+    ERROR("cannot execute '%s': %m\n", job_map_cmd);
     return -1;
   }
 
@@ -400,7 +400,7 @@ static int external_get_job_map(void)
   free(line);
 
   if ((pclose_rc = pclose(pipe)) < 0)
-    ERROR("cannot obtain termination status of %s: %m\n", get_job_map_cmd);
+    ERROR("cannot obtain termination status of %s: %m\n", job_map_cmd);
 
   /* XXX We may be returning -1 with errno unset. */
   return pclose_rc == 0 ? 0 : -1;

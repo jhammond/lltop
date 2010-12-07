@@ -7,7 +7,7 @@ extern const char *lltop_ssh_path;
 extern const char *lltop_serv_path;
 extern int (*lltop_get_host)(const char *addr, char *host, size_t host_size);
 extern int (*lltop_get_job)(const char *host, char *job, size_t job_size);
-extern int (*lltop_get_job_map)(void);
+extern int (*lltop_job_map)(void);
 
 void lltop_set_job(const char *host, const char *job);
 int lltop_config(int argc, char *argv[], char ***serv_list, int *serv_count);
