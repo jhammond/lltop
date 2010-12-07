@@ -35,85 +35,163 @@ struct name_stats {
   char ns_name[];
 };
 
-struct addr_cache {
-  struct rb_node ac_node;
-  struct name_stats *ac_stats;
-  char ac_addr[];
+struct cache_struct {
+  struct rb_node c_node;
+  struct name_stats *c_stats;
+  char c_name[];
 };
 
 struct rb_root addr_cache_root = RB_ROOT;
+struct rb_root host_cache_root = RB_ROOT;
 struct rb_root name_stats_root = RB_ROOT;
 int name_stats_count = 0;
 
-static void account(const char *addr, long wr, long rd, long reqs)
+static struct cache_struct *lookup(struct rb_root *root, const char *name, int create)
 {
-  struct addr_cache *cache = NULL;
-  struct name_stats *stats = NULL;
-  char host[MAXNAME + 1];
-  char job[MAXNAME + 1];
-  const char *name; /* For look-up in name_stats tree, may be addr, host, or job. */
-
+  struct cache_struct *cache = NULL;
   struct rb_node **link, *parent;
 
-  /* Find or create addr_cache, name_stats for addr. */
-  link = &(addr_cache_root.rb_node);
+  link = &root->rb_node;
   parent = NULL;
+
   while (*link != NULL) {
-    cache = rb_entry(*link, struct addr_cache, ac_node);
+    cache = rb_entry(*link, struct cache_struct, c_node);
     parent = *link;
 
-    int cmp = strcmp(addr, cache->ac_addr);
-    if (cmp < 0) {
+    int cmp = strcmp(name, cache->c_name);
+    if (cmp < 0)
       link = &((*link)->rb_left);
-    } else if (cmp > 0) {
+    else if (cmp > 0)
       link = &((*link)->rb_right);
-    } else {
-      stats = cache->ac_stats;
-      goto have_stats;
-    }
+    else
+      return cache;
   }
 
-  /* addr not cached, create entry, link, and initialize. */
-  cache = alloc(sizeof(*cache) + strlen(addr) + 1);
-  rb_link_node(&cache->ac_node, parent, link);
-  rb_insert_color(&cache->ac_node, &addr_cache_root);
-  strcpy(cache->ac_addr, addr);
+  if (create) {
+    cache = alloc(sizeof(*cache) + strlen(name) + 1);
+    memset(cache, 0, sizeof(*cache));
+    rb_link_node(&cache->c_node, parent, link);
+    rb_insert_color(&cache->c_node, root);
+    strcpy(cache->c_name, name);
+  }
 
-  /* Try to find host, job for addr. */
-  if ((*lltop_get_host)(addr, host, sizeof(host)) < 0)
-    name = addr;
-  else if ((*lltop_get_job)(host, job, sizeof(job)) < 0)
-    name = host;
-  else
-    name = job;
+  return cache;
+}
 
-  /* Look up name_stats for name. */
-  link = &(name_stats_root.rb_node);
+static struct name_stats *get_name_stats(const char *name)
+{
+  struct name_stats *stats;
+  struct rb_node **link, *parent;
+
+  link = &name_stats_root.rb_node;
   parent = NULL;
+
   while (*link != NULL) {
     stats = rb_entry(*link, struct name_stats, ns_node);
     parent = *link;
 
     int cmp = strcmp(name, stats->ns_name);
-    if (cmp < 0) {
+    if (cmp < 0)
       link = &((*link)->rb_left);
-    } else if (cmp > 0) {
+    else if (cmp > 0)
       link = &((*link)->rb_right);
-    } else {
-      goto have_stats;
-    }
+    else
+      return stats;
   }
 
-  /* Create name_stats, link, and initialize. */
-  name_stats_count++;
   stats = alloc(sizeof(*stats) + strlen(name) + 1);
   memset(stats, 0, sizeof(*stats));
   rb_link_node(&stats->ns_node, parent, link);
   rb_insert_color(&stats->ns_node, &name_stats_root);
   strcpy(stats->ns_name, name);
+  name_stats_count++;
+
+  return stats;
+}
+
+void lltop_set_job(const char *host, const char *job)
+{
+  struct cache_struct *cache;
+
+  cache = lookup(&host_cache_root, host, 1);
+  cache->c_stats = get_name_stats(job);
+}
+
+#if 0
+static struct name_stats *get_host_stats(const char *host)
+{
+  struct cache_struct *host_cache;
+  char job[MAXNAME + 1];
+
+  if (lltop_get_job_map != NULL) {
+    host_cache = lookup(&host_cache_root, host, 0);
+    if (host_cache != NULL)
+      return host_cache->c_stats;
+    return get_name_stats(host);
+  }
+
+  if (lltop_get_job == NULL || (*lltop_get_job)(host, job, sizeof(job)) < 0)
+    return get_name_stats(host);
+  return get_name_stats(job);
+}
+
+static struct name_stats *get_addr_stats(const char *addr)
+{
+  struct name_stats *stats = NULL;
+  struct cache_struct *addr_cache;
+  char host[MAXNAME + 1];
+
+  addr_cache = lookup(&addr_cache_root, addr, 1);
+  if (addr_cache->c_stats != NULL)
+    return addr_cache->c_stats;
+
+  if (lltop_get_host == NULL || (*lltop_get_host)(addr, host, sizeof(host)) < 0) {
+    stats = get_name_stats(addr);
+    goto have_stats;
+  }
+
+  stats = get_host_stats(host);
 
  have_stats:
-  cache->ac_stats = stats;
+  addr_cache->c_stats = stats;
+  return stats;
+}
+#endif
+
+static void account(const char *addr, long wr, long rd, long reqs)
+{
+  struct name_stats *stats = NULL;
+  struct cache_struct *addr_cache;
+  struct cache_struct *host_cache;
+  char host[MAXNAME + 1];
+  char job[MAXNAME + 1];
+
+  addr_cache = lookup(&addr_cache_root, addr, 1);
+  if (addr_cache->c_stats != NULL) {
+    stats = addr_cache->c_stats;
+    goto have_stats;
+  }
+
+  if (lltop_get_host == NULL || (*lltop_get_host)(addr, host, sizeof(host)) < 0) {
+    stats = get_name_stats(addr);
+    goto have_stats;
+  }
+
+  host_cache = lookup(&host_cache_root, host, 0);
+  if (host_cache != NULL) {
+    stats = host_cache->c_stats;
+    goto have_stats;
+  }
+
+  if (lltop_get_job == NULL || (*lltop_get_job)(host, job, sizeof(job)) < 0) {
+    stats = get_name_stats(host);
+    goto have_stats;
+  }
+
+  stats = get_name_stats(job);
+
+ have_stats:
+  addr_cache->c_stats = stats;
   stats->ns_wr += wr;
   stats->ns_rd += rd;
   stats->ns_reqs += reqs;
@@ -174,6 +252,9 @@ int main(int argc, char *argv[])
   }
   lltop_free_serv_list(serv_list, serv_count);
   close(fdv[1]);
+
+  if (lltop_get_job_map != NULL && (*lltop_get_job_map)() < 0)
+    FATAL("cannot get job map: %m\n");
 
   TRACE("reading lltop-serv output\n");
 
@@ -236,7 +317,8 @@ int main(int argc, char *argv[])
 
   /* Cleanup is somewhat pointless since we're exiting right away. */
 #ifdef DEBUG
-  rb_destroy(&addr_cache_root, offsetof(struct addr_cache, ac_node), &free);
+  rb_destroy(&addr_cache_root, offsetof(struct cache_struct, c_node), &free);
+  rb_destroy(&host_cache_root, offsetof(struct cache_struct, c_node), &free);
   rb_destroy(&name_stats_root, offsetof(struct name_stats, ns_node), &free);
   free(stats_vec);
 #endif
