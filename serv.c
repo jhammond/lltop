@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include "lltop.h"
 #include "rbtree.h"
@@ -151,6 +152,7 @@ int get_target_stats(const char *tgt_name, int which)
 int main(int argc, char *argv[])
 {
   int intvl = DEFAULT_LLTOP_INTVL;
+  struct timespec intvl_spec;
 
   struct option opts[] = {
     { "interval", 1, 0, 'i' },
@@ -175,10 +177,22 @@ int main(int argc, char *argv[])
    * break up writes, but it seems to work. */
   setlinebuf(stdout);
 
+  if (clock_gettime(CLOCK_MONOTONIC, &intvl_spec) < 0)
+    FATAL("cannot read monotonic clock: %m\n");
+
   TRACE("scanning stats files\n");
 
   int which, type, found = 0;
   for (which = 0; which < 2; which++) {
+    /* Before we start pass 1, we wait until at least intvl seconds
+       have elapsed since the start of pass 0. */
+    if (which == 1) {
+      intvl_spec.tv_sec += intvl;
+      errno = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &intvl_spec, NULL);
+      if (errno != 0)
+        FATAL("clock_nanosleep() failed: %m\n");
+    }
+
     for (type = 0; type < 2; type++) {
       DIR *dir = opendir(filter_path[type]);
       if (dir == NULL) {
@@ -202,11 +216,6 @@ int main(int argc, char *argv[])
     if (found == 0) {
       errno = ENOENT;
       FATAL("cannot access %s or %s: %m\n", filter_path[0], filter_path[1]);
-    }
-
-    if (which == 0) {
-      TRACE("sleeping for %d seconds\n", intvl);
-      sleep(intvl);
     }
   }
 

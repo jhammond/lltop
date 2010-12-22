@@ -10,7 +10,7 @@ lltop: $(lltop_objects)
 	$(CC) $(CFLAGS) $^ -o $@ 
 
 lltop-serv: $(lltop_serv_objects)
-	$(CC) $(CFLAGS) $^ -o $@
+	$(CC) $(CFLAGS) $^ -o $@ -lrt
 
 clean:
 	rm -f lltop $(lltop_objects) lltop-serv $(lltop_serv_objects)
