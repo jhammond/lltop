@@ -48,7 +48,7 @@ int name_stats_count = 0;
 
 static struct cache_struct *lookup(struct rb_root *root, const char *name, int create)
 {
-  struct cache_struct *cache = NULL;
+  struct cache_struct *cache;
   struct rb_node **link, *parent;
 
   link = &root->rb_node;
@@ -67,14 +67,14 @@ static struct cache_struct *lookup(struct rb_root *root, const char *name, int c
       return cache;
   }
 
-  if (create) {
-    cache = alloc(sizeof(*cache) + strlen(name) + 1);
-    memset(cache, 0, sizeof(*cache));
-    rb_link_node(&cache->c_node, parent, link);
-    rb_insert_color(&cache->c_node, root);
-    strcpy(cache->c_name, name);
-  }
+  if (!create)
+    return NULL;
 
+  cache = alloc(sizeof(*cache) + strlen(name) + 1);
+  memset(cache, 0, sizeof(*cache));
+  rb_link_node(&cache->c_node, parent, link);
+  rb_insert_color(&cache->c_node, root);
+  strcpy(cache->c_name, name);
   return cache;
 }
 
