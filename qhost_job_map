@@ -1,0 +1,21 @@
+#!/bin/bash
+
+export PATH=$PATH:XXX
+export SGE_CELL=default
+export SGE_EXECD_PORT=537
+export SGE_QMASTER_PORT=536
+export SGE_ROOT=XXX
+export SGE_CLUSTER_NAME=XXX
+
+# Translates qconf -j's busted output to sane '<hostname> <jobid>'
+# form.  Not thoroughly tested, but works for me.
+
+qhost -j | awk '{
+  if ($0 ~ /^[[:alpha:]]/) {
+    current_host = $1;
+    need_job = 1;
+  } else if (need_job && $1 ~ /^[0-9]+$/) {
+    print current_host, $1;
+    need_job = 0;
+  }
+}'

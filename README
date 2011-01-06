@@ -125,6 +125,13 @@ This is the default method in lltop.  Otherwise:
   do job lookup.  It should function like the external host lookup
   command described above.
 
+  d. Use the -m (--job-map) option to specify an external command
+  which produces a "job map."  This is useful if you use something
+  like qhost for job lookup, since using 'qhost -j -h <host>' to get
+  the current job of a single takes about the same time as calling
+  'qhost -j' to get the current job of all nodes at once.  See the
+  attached script qhost_job_map.
+
                           *Installing lltop*
 
 Run make, put lltop somewhere in your path on an admin node, put
