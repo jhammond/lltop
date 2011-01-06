@@ -143,9 +143,11 @@ Mandatory arguments to long options are mandatory for short options too.
   -f, --fqdn               use fully qualified domain names for clients
   -g, --get-host=COMMAND   use COMMAND for reverse DNS lookups
   -h, --help               display this help and exit
-  -i, --interval=NUMBER    report usage over NUMBER seconds
+  -i, --interval=NUMBER    report load over NUMBER seconds
   -j, --get-job=COMMAND    use COMMAND for job lookup
   -l, --server-list        report load on servers given as arguments
+  -m, --job-map=COMMAND    use COMMAND to get job map
+  -n, --limit=NUMBER       limit output to NUMBER jobs
       --no-header          do not display header
       --lltop-serv=PATH    use lltop-serv at PATH on servers
       --remote-shell=PATH  use remote shell at PATH to execute lltop-serv
