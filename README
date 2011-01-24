@@ -160,7 +160,6 @@ Mandatory arguments to long options are mandatory for short options too.
       --remote-shell=PATH  use remote shell at PATH to execute lltop-serv
       --execd-spool=PATH   use execd_spool directory PATH for job lookup
 
-lltop home page: <http://users.ices.utexas.edu/~jhammond/lltop/>
 lltop GitHub repository: <https://github.com/jhammond/lltop>
 
 Otherwise, please send me any comments, questions, improvements.  I am
@@ -169,8 +168,8 @@ job lookup for batch schedulers other than SGE.  Please, put lltop in
 the subject line.
 
 John L. Hammond
-ICES, The University of Texas at Austin
-<jhammond@ices.utexas.edu>
+TACC, The University of Texas at Austin
+<jhammond@tacc.utexas.edu>
 
 --
 

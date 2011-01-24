@@ -1,5 +1,5 @@
 /* lltop hooks.c
- * Copyright 2010 by John L. Hammond <jhammond@ices.utexas.edu>
+ * Copyright 2010 by John L. Hammond <jhammond@tacc.utexas.edu>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -82,7 +82,6 @@ static int usage(void)
           "\n"
           /* TODO Describe function, document default argument values. */
           /* TODO "Report lltop bugs to ...\n" */
-          "lltop home page: <http://users.ices.utexas.edu/~jhammond/lltop/>\n"
           "lltop GitHub repository: <https://github.com/jhammond/lltop>\n");
   exit(1);
 }

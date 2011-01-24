@@ -93,7 +93,7 @@ static inline struct page * rb_insert_page_cache(struct inode * inode,
 -----------------------------------------------------------------------
 */
 /* Small mofifications to compile out of kernel.  Added rb_destroy().
-   Nov 2010, John L. Hammond, <jhammond@ices.utexas.edu>. */
+   Nov 2010, John L. Hammond, <jhammond@tacc.utexas.edu>. */
 #include <sys/types.h> /* For size_t. */
 
 struct rb_node {
