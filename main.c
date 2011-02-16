@@ -117,47 +117,6 @@ void lltop_set_job(const char *host, const char *job)
   cache->c_stats = get_name_stats(job);
 }
 
-#if 0
-static struct name_stats *get_host_stats(const char *host)
-{
-  struct cache_struct *host_cache;
-  char job[MAXNAME + 1];
-
-  if (lltop_job_map != NULL) {
-    host_cache = lookup(&host_cache_root, host, 0);
-    if (host_cache != NULL)
-      return host_cache->c_stats;
-    return get_name_stats(host);
-  }
-
-  if (lltop_get_job == NULL || (*lltop_get_job)(host, job, sizeof(job)) < 0)
-    return get_name_stats(host);
-  return get_name_stats(job);
-}
-
-static struct name_stats *get_addr_stats(const char *addr)
-{
-  struct name_stats *stats = NULL;
-  struct cache_struct *addr_cache;
-  char host[MAXNAME + 1];
-
-  addr_cache = lookup(&addr_cache_root, addr, 1);
-  if (addr_cache->c_stats != NULL)
-    return addr_cache->c_stats;
-
-  if (lltop_get_host == NULL || (*lltop_get_host)(addr, host, sizeof(host)) < 0) {
-    stats = get_name_stats(addr);
-    goto have_stats;
-  }
-
-  stats = get_host_stats(host);
-
- have_stats:
-  addr_cache->c_stats = stats;
-  return stats;
-}
-#endif
-
 static void account(const char *addr, long wr, long rd, long reqs)
 {
   struct name_stats *stats = NULL;
