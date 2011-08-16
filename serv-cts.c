@@ -27,20 +27,76 @@
 #include <time.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <errno.h>
+#include <netdb.h>
+#include <sys/un.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include "lltop.h"
 #include "dict.h"
 
-#define NR_CLIENTS_HINT 4096
-#define TIME_BUF_SIZE 80
-char *time_fmt = "%T"; /* Must strftime() to less than TIME_BUF_SIZE
-                          characters. */
-int print_all = 1;
+#define LLTOP_MSG_MAX 64000 /* UDP max minus stuff minus some other stuff. */
+#define LLTOP_PORT "9907"
+#define NR_CLIENTS_HINT 4096 /* Initial dict size. */
 
 struct dict name_stats_dict;
 
 #define NS_WR 0
 #define NS_RD 1
 #define NS_REQS 2
+
+struct msg_buf {
+  char *mb_buf;
+  size_t mb_len, mb_size;
+  int mb_fd;
+};
+
+int msg_buf_init(struct msg_buf *mb, int fd, char *buf, size_t size)
+{
+  mb->mb_fd = fd;
+  mb->mb_len = 0;
+  mb->mb_size = size;
+  mb->mb_buf = buf;
+  return 0;
+}
+
+int msg_buf_send(struct msg_buf *mb, const char *name, long wr, long rd, long reqs)
+{
+  size_t avail, need;
+
+ again:
+  avail = mb->mb_size - mb->mb_len;
+  need = snprintf(mb->mb_buf + mb->mb_len, avail, "%s %ld %ld %ld\n", name, wr, rd, reqs);
+
+  if (need >= avail) {
+    if (mb->mb_len == 0) {
+      errno = ENAMETOOLONG;
+      return -1;
+    }
+
+    if (send(mb->mb_fd, mb->mb_buf, mb->mb_len, 0) < 0)
+      return -1;
+
+    mb->mb_len = 0;
+    goto again;
+  }
+
+  mb->mb_len += need;
+
+  return 0;
+}
+
+int msg_buf_flush(struct msg_buf *mb)
+{
+  if (mb->mb_len > 0) {
+    if (send(mb->mb_fd, mb->mb_buf, mb->mb_len, 0) < 0)
+      return -1;
+
+    mb->mb_len = 0;
+  }
+
+  return 0;
+}
 
 struct name_stats {
   long ns_stats[2][3];
@@ -233,29 +289,77 @@ int read_target_stats(struct lustre_target *target, unsigned int gen)
 
 int main(int argc, char *argv[])
 {
+  int daemonize = 0;
+  int send_all = 0;
   int intvl = DEFAULT_LLTOP_INTVL;
+  char *host_arg = NULL, *port_arg = LLTOP_PORT;
+  int sfd = -1;
+  struct msg_buf mb;
+  char mb_buf[LLTOP_MSG_MAX];
 
   struct option opts[] = {
+    { "send-all", 0, NULL, 'a' },
+    { "daemon", 0, NULL, 'd' },
     { "interval", 1, NULL, 'i' },
-    { "time-format", 1, NULL, 't' },
+    { "port", 1, NULL, 'p' },
     { NULL, 0, NULL, 0 },
   };
 
   int c;
-  while ((c = getopt_long(argc, argv, "i:t:", opts, 0)) > 0) {
+  while ((c = getopt_long(argc, argv, "adi:p:", opts, 0)) > 0) {
     switch (c) {
+    case 'a':
+      send_all = 1;
+      continue;
+    case 'd':
+      daemonize = 1;
+      continue;
     case 'i':
       intvl = atoi(optarg);
       if (intvl <= 0)
         FATAL("invalid sleep interval `%s'\n", optarg);
       continue;
-    case 't':
-      time_fmt = optarg;
+    case 'p':
+      port_arg = optarg;
       continue;
     case '?':
       FATAL("invalid option\n");
     }
   }
+
+  if (argc - optind <= 0) {
+    fprintf(stderr, "Usage: %s [OPTIONS] HOST\n", program_invocation_short_name);
+    exit(1);
+  }
+  host_arg = argv[optind];
+
+  struct addrinfo hints, *list, *info;
+  hints = (struct addrinfo) {
+    .ai_family = AF_INET, /* XXX */
+    .ai_socktype = SOCK_DGRAM,
+  };
+
+  int gai_rc = getaddrinfo(host_arg, port_arg, &hints, &list);
+  if (gai_rc != 0)
+    FATAL("cannot resolve host `%s', service `%s': %s\n",
+	  host_arg, port_arg, gai_strerror(gai_rc));
+
+  for (info = list; info != 0; info = info->ai_next) {
+    if ((sfd = socket(info->ai_family, info->ai_socktype, info->ai_protocol)) < 0)
+      continue;
+    if (connect(sfd, info->ai_addr, info->ai_addrlen) == 0)
+      break;
+    close(sfd);
+    sfd = -1;
+  }
+
+  freeaddrinfo(list);
+
+  if (sfd < 0)
+    FATAL("cannot connect to host `%s', service `%s': %m\n", host_arg, port_arg);
+
+  if (msg_buf_init(&mb, sfd, mb_buf, sizeof(mb_buf)) < 0)
+    FATAL("cannot create message buffer: %m\n");
 
   if (get_target_list(&target_list, &nr_targets, "/proc/fs/lustre/mdt") < 0)
     exit(1);
@@ -273,18 +377,17 @@ int main(int argc, char *argv[])
   if (clock_gettime(CLOCK_MONOTONIC, &intvl_spec) < 0)
     FATAL("cannot get current time: %m\n");
 
+  if (daemonize && daemon(0, 0) < 0)
+    FATAL("cannot daemonize: %m\n");
+
   unsigned int gen;
   for (gen = 0; ; gen++) {
-    char time_buf[TIME_BUF_SIZE];
-    time_t now = time(NULL);
-    struct tm tm_now = *localtime(&now);
-    strftime(time_buf, sizeof(time_buf), time_fmt, &tm_now);
-
     int i;
     for (i = 0; i < nr_targets; i++)
       read_target_stats(&target_list[i], gen);
 
-    chdir("/");
+    if (daemonize)
+      chdir("/");
 
     if (gen == 0)
       goto sleep;
@@ -296,7 +399,7 @@ int main(int argc, char *argv[])
       long *s0, *s1, wr, rd, reqs;
 
       if (ns->ns_gen != gen) {
-        TRACE("stale stats found for client `%s'\n", ns->ns_name);
+        TRACE("stale stats found for client `%s', removing\n", ns->ns_name);
         dict_entry_remv(&name_stats_dict, de, 0);
         free(ns);
         continue;
@@ -310,19 +413,27 @@ int main(int argc, char *argv[])
 
       /* If any stats are negative then we assume that the client was
          evicted while we slept, so we skip it. */
-      if (!print_all && (wr < 0 || rd < 0 || reqs < 0)) {
+      if (!send_all && (wr < 0 || rd < 0 || reqs < 0)) {
         TRACE("skipping %s %ld %ld %ld\n", ns->ns_name, wr, rd, reqs);
         continue;
       }
 
       /* Skip client if all stats are zero. */
-      if (!print_all && wr == 0 && rd == 0 && reqs == 0) {
+      if (!send_all && wr == 0 && rd == 0 && reqs == 0) {
         TRACE("skipping %s %ld %ld %ld\n", ns->ns_name, wr, rd, reqs);
         continue;
       }
 
-      printf("%s %s %ld %ld %ld\n", time_buf, ns->ns_name, wr, rd, reqs);
+      if (msg_buf_send(&mb, ns->ns_name, wr, rd, reqs) < 0) {
+	if (errno == ENAMETOOLONG)
+	  ERROR("skipping client `%s': name too long\n", ns->ns_name);
+	else
+	  FATAL("cannot send to host `%s', service `%s': %m\n", host_arg, port_arg);
+      }
     }
+
+    if (msg_buf_flush(&mb) < 0)
+      FATAL("cannot send to host `%s', service `%s': %m\n", host_arg, port_arg);
 
   sleep:
     intvl_spec.tv_sec += intvl;
