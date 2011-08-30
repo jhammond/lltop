@@ -9,18 +9,18 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <ncurses.h>
+#include <termios.h>
 #include <ev.h>
 #include "string1.h"
 #include "lltop.h"
 #include "dict.h"
 #include "list.h"
-
-#define LNET_NIDSTR_SIZE 32 /* Not used. */
 
 const char *job_mapper_cmd = "cat /tmp/lltop/mapper-fifo";
 const char *nid_file_path = "/tmp/lltop/client-nids";
@@ -443,6 +443,7 @@ serv_create(const char *name, ev_tstamp offset, ev_tstamp interval)
   ALLOC_NAMED(serv, s_name, name);
   ev_init(&serv->s_io_w, &serv_io_cb); /* Don't start IO. */
   ev_timer_init(&serv->s_timer_w, &serv_timer_cb, offset, interval);
+
   if (rx_buf_init(&serv->s_rx_buf, RX_BUF_SIZE) < 0)
     OOM();
   if (dict_init(&serv->s_frame, NR_JOBS_HINT) < 0)
@@ -494,6 +495,7 @@ static void serv_connect(EV_P_ struct serv_struct *serv,
   serv->s_addrlen = addrlen;
   ev_io_set(&serv->s_io_w, sfd, EV_READ);
   ev_io_start(EV_A_ &serv->s_io_w);
+  ev_timer_start(EV_A_ &serv->s_timer_w);
   serv->s_connected = 1;
 }
 
@@ -539,6 +541,8 @@ static void serv_msg(struct serv_struct *serv, char *msg)
     FATAL("dict_entry_set: %m\n");
 
  have_fe:
+  TRACE("serv `%s', s_gen %u, job `%s', fe_gen %u\n",
+	serv->s_name, serv->s_gen, fe->fe_job->j_name, fe->fe_gen);
   if (fe->fe_gen == serv->s_gen)
     /* OK */;
   else if (fe->fe_gen == serv->s_gen - 1)
@@ -551,6 +555,11 @@ static void serv_msg(struct serv_struct *serv, char *msg)
   int i;
   for (i = 0; i < NR_STATS; i++)
     fe->fe_stats[fe->fe_gen % 2][i] += stats[i];
+
+  TRACE("fe_stats %ld %ld %ld\n",
+	fe->fe_stats[fe->fe_gen % 2][0],
+	fe->fe_stats[fe->fe_gen % 2][1],
+	fe->fe_stats[fe->fe_gen % 2][2]);
 }
 
 static void serv_io_cb(EV_P_ ev_io *w, int revents)
@@ -604,10 +613,10 @@ static void serv_timer_cb(EV_P_ ev_timer *w, int revents)
 
     int i;
     for (i = 0; i < NR_STATS; i++) {
-      if (fe_age == 1)
-	fe->fe_job->j_stats[i] -= s_prev[i];
       if (fe_age == 0)
 	fe->fe_job->j_stats[i] += s_next[i] - s_prev[i];
+      else if (fe_age == 1)
+	fe->fe_job->j_stats[i] -= s_prev[i];
     }
   }
   dict_allow_resize(&serv->s_frame, NR_JOBS_HINT);
@@ -719,7 +728,7 @@ job_stats_cmp(const void *v1, const void *v2)
   return 0;
 }
 
-static void refresh_cb(EV_P_ ev_timer *w, int revents)
+static void refresh_display(void)
 {
   TRACE("refresh LINES %d, COLS %d\n", LINES, COLS);
 
@@ -752,13 +761,46 @@ static void refresh_cb(EV_P_ ev_timer *w, int revents)
   refresh();
 }
 
+static void refresh_cb(EV_P_ ev_timer *w, int revents)
+{
+  refresh_display();
+}
+
+static void sigint_cb(EV_P_ ev_signal *w, int revents)
+{
+  TRACE("handling signal %d `%s'\n", w->signum, strsignal(w->signum));
+  ev_break(EV_A_ EVBREAK_ALL);
+}
+
+static void sigwinch_cb(EV_P_ ev_signal *w, int revents)
+{
+  TRACE("handling signal %d `%s'\n", w->signum, strsignal(w->signum));
+  struct winsize ws;
+
+  int fd = open("/dev/tty", O_RDWR);
+  if (fd < 0) {
+    ERROR("cannot open `/dev/tty': %m\n");
+    goto out;
+  }
+
+  if (ioctl(fd, TIOCGWINSZ, &ws) < 0) {
+    ERROR("cannot get window size: %m\n");
+    goto out;
+  }
+
+  LINES = ws.ws_row;
+  COLS = ws.ws_col;
+
+  refresh_display();
+ out:
+  if (fd >= 0)
+    close(fd);
+}
+
 int main(int argc, char *argv[])
 {
   const char *bind_host = BIND_HOST, *bind_port = BIND_PORT;
   int listen_backlog = 128; /* XXX */
-  struct ev_io listen_w;
-  struct ev_io stdin_w;
-  struct ev_timer refresh_w;
   struct job_mapper mapper;
 
   signal(SIGPIPE, SIG_IGN);
@@ -777,6 +819,16 @@ int main(int argc, char *argv[])
 
   if (job_mapper_init(EV_DEFAULT_ &mapper, job_mapper_cmd) < 0)
     FATAL("cannot start job mapper `%s'\n", job_mapper_cmd);
+
+  /* Begin curses magic. */
+  /* setlocale(LC_ALL, ""); */
+  initscr();
+  cbreak();
+  noecho();
+  nonl();
+  intrflush(stdscr, 0);
+  keypad(stdscr, 1);
+  nodelay(stdscr, 1);
 
   struct addrinfo *info, *list, hints = {
     .ai_family = AF_INET, /* Still needed. */
@@ -811,24 +863,25 @@ int main(int argc, char *argv[])
   if (listen(lfd, listen_backlog) < 0)
     FATAL("cannot listen on `%s', service `%s': %m\n", bind_host, bind_port);
 
+  struct ev_io listen_w;
   ev_io_init(&listen_w, &listen_cb, lfd, EV_READ);
   ev_io_start(EV_DEFAULT_ &listen_w);
 
+  struct ev_io stdin_w;
   ev_io_init(&stdin_w, &stdin_cb, 0, EV_READ);
   ev_io_start(EV_DEFAULT_ &stdin_w);
 
+  struct ev_timer refresh_w;
   ev_timer_init(&refresh_w, &refresh_cb, 0., REFRESH_INTERVAL);
   ev_timer_start(EV_DEFAULT_ &refresh_w);
 
-  /* Begin curses magic. */
-  /* setlocale(LC_ALL, ""); */
-  initscr();
-  cbreak();
-  noecho();
-  nonl();
-  intrflush(stdscr, 0);
-  keypad(stdscr, 1);
-  nodelay(stdscr, 1);
+  struct ev_signal sigint_w;
+  ev_signal_init(&sigint_w, &sigint_cb, SIGINT);
+  ev_signal_start(EV_DEFAULT_ &sigint_w);
+
+  struct ev_signal sigwinch_w;
+  ev_signal_init(&sigwinch_w, &sigwinch_cb, SIGWINCH);
+  ev_signal_start(EV_DEFAULT_ &sigwinch_w);
 
   ev_run(EV_DEFAULT_ 0);
   endwin(); /* TODO Call on OOM(). */
