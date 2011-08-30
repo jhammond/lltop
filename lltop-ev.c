@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <ncurses.h>
 #include <ev.h>
 #include "string1.h"
 #include "lltop.h"
@@ -21,26 +22,28 @@
 
 #define LNET_NIDSTR_SIZE 32 /* Not used. */
 
-const char *job_maper_cmd = ""; /* Or command. */
-const char *nid_file_path = "/tmp/lltop-nids";
+const char *job_mapper_cmd = "cat /tmp/lltop/mapper-fifo";
+const char *nid_file_path = "/tmp/lltop/client-nids";
 
 #define BIND_HOST "0.0.0.0" /* INADDR_ANY */
 #define BIND_PORT "9909"
 #define NR_STATS 3
 #define NR_CLIENTS_HINT 4096
-#define NR_JOBS_HINT 128
+#define NR_JOBS_HINT 256
+#define NR_SERVS_HINT 128
 #define LLTOP_MSG_SEP ""
 #define LLTOP_MSG_SEP_LEN 1
 #define RX_BUF_SIZE 8096
 #define JOB_NONE "0"
-#define FE_AGE_LIMIT 32 /* MOVEME */
+#define FE_AGE_LIMIT 32
+#define REFRESH_INTERVAL 10.0
+#define SERV_INTERVAL 10.0
 
 static size_t nr_jobs;
 static struct dict name_job_dict;
 static struct dict name_client_dict;
 static struct dict name_serv_dict;
 static struct dict nid_client_dict;
-static struct ev_loop *loop = NULL;
 
 struct pair {
   void *p_value;
@@ -88,6 +91,7 @@ struct frame_entry {
 struct serv_struct {
   struct ev_io s_io_w;
   struct ev_timer s_timer_w;
+  struct rx_buf s_rx_buf;
   struct dict s_frame;  
   struct sockaddr_storage s_addr;
   socklen_t s_addrlen;
@@ -114,10 +118,10 @@ struct serv_struct {
     strcpy(ptr->member, name);				\
   } while (0)
 
-static inline int fd_set_nonblock(int fd)
+static inline void fd_set_nonblock(int fd)
 {
-  int flags = fcntl(fd, F_GELFL);
-  fcntl(fd, flags|O_NONBLOCK);
+  int flags = fcntl(fd, F_GETFL);
+  fcntl(fd, F_SETFL, flags|O_NONBLOCK);
 }
 
 int rx_buf_init(struct rx_buf *rb, size_t size)
@@ -129,6 +133,7 @@ int rx_buf_init(struct rx_buf *rb, size_t size)
     return -1;
 
   rb->r_buf_size = size;
+  return 0;
 }
 
 ssize_t rx_buf_read(int fd, struct rx_buf *rb)
@@ -152,11 +157,11 @@ ssize_t rx_buf_read(int fd, struct rx_buf *rb)
     goto again;
   }
 
-  nr_read = read(df, read_pos, nr_avail);
-  if (nr_read < 0)
-    return nr_read;
+  nr_read = read(fd, read_pos, nr_avail);
+  if (nr_read > 0)
+    rb->r_count += nr_read;
 
-  rb->rb_count += nr_read;
+  return nr_read;
 }
 
 char *rx_buf_iter(struct rx_buf *rb)
@@ -196,6 +201,7 @@ struct job_struct *job_lookup(const char *name, int create)
   if (!create)
     return NULL;
 
+  TRACE("creating job `%s'\n", name);
   ALLOC_NAMED(job, j_name, name);
   INIT_LIST_HEAD(&job->j_client_list);
   INIT_LIST_HEAD(&job->j_frame_list);
@@ -220,6 +226,7 @@ void job_put(struct job_struct *job)
   if (!list_empty(&job->j_frame_list))
     return;
 
+  TRACE("freeing job `%s'\n", job->j_name);
   de = dict_entry_ref(&name_job_dict, job->j_hash, job->j_name);
   dict_entry_remv(&name_job_dict, de, 1); /* XXX Resize. */
   free(job);
@@ -261,6 +268,7 @@ void client_set_job_by_name(struct client_struct *cli, const char *job_name)
   if (cur_job != NULL && strcmp(job_name, cur_job->j_name) == 0)
     return;
 
+  TRACE("adding client `%s' to job `%s'\n", cli->c_name, job_name);
   new_job = job_lookup(job_name, 1);
   if (new_job == NULL)
     OOM();
@@ -295,13 +303,12 @@ void client_add_nid(struct client_struct *cli, const char *nid)
     return;
   }
 
+  TRACE("adding NID `%s' to client `%s'\n", nid, cli->c_name);
   ALLOC_NAMED(p, p_key, nid);
   p->p_value = cli;
 
   if (dict_entry_set(&nid_client_dict, de, hash, p->p_key) < 0)
     OOM();
-
-  return 0;
 }
 
 struct client_struct *client_lookup_by_nid(const char *nid, int create)
@@ -346,9 +353,9 @@ static void job_mapper_io_cb(EV_P_ ev_io *w, int revents)
   /* TODO EV_ERROR. */
 
   struct job_mapper *jm = container_of(w, struct job_mapper, jm_io_w);
-  struct rx_buf *rb = jm->jm_rx_buf;
+  struct rx_buf *rb = &jm->jm_rx_buf;
 
-  ssize_t nr_read = rx_buf_read(w->fd, &rb);
+  ssize_t nr_read = rx_buf_read(w->fd, rb);
   if (nr_read < 0) {
     if (may_ignore_errno())
       return;
@@ -357,9 +364,9 @@ static void job_mapper_io_cb(EV_P_ ev_io *w, int revents)
   }
 
   char *msg, *cli_name, *job_name;
-  while ((msg = rx_buf_iter(&rb)) != NULL) {
-    cli_name = wsep(msg);
-    job_name = wsep(msg);
+  while ((msg = rx_buf_iter(rb)) != NULL) {
+    cli_name = wsep(&msg);
+    job_name = wsep(&msg);
 
     if (cli_name == NULL || job_name == NULL)
       continue;
@@ -385,7 +392,7 @@ int job_mapper_init(EV_P_ struct job_mapper *jm, const char *cmd)
   if (pid == 0) {
     close(pfd[0]);
     dup2(pfd[1], 1);
-    int status = system(cmd);
+    int status = system(cmd); /* BLECH */
     if (WIFSIGNALED(status))
       FATAL("job mapper `%s' terminated by %s\n", cmd,
 	    strsignal(WTERMSIG(status)));
@@ -411,7 +418,10 @@ int job_mapper_init(EV_P_ struct job_mapper *jm, const char *cmd)
   ev_child_init(&jm->jm_child_w, &job_mapper_child_cb, pid, 0);
   ev_child_start(EV_A_ &jm->jm_child_w);
 
-  rx_buf_init(&jm->jm_rx_buf, RX_BUF_SIZE);
+  if (rx_buf_init(&jm->jm_rx_buf, RX_BUF_SIZE) < 0)
+    OOM();
+
+  return 0;
 }
 
 static void serv_io_cb(EV_P_ ev_io *w, int revents);
@@ -429,9 +439,12 @@ serv_create(const char *name, ev_tstamp offset, ev_tstamp interval)
     return serv;
   }
 
+  TRACE("creating serv `%s', offset %f, interval %f\n", name, offset, interval);
   ALLOC_NAMED(serv, s_name, name);
   ev_init(&serv->s_io_w, &serv_io_cb); /* Don't start IO. */
-  ev_timer_init(&serv->s_timer_w, &serv_timer_cb, offset, interval, NULL);
+  ev_timer_init(&serv->s_timer_w, &serv_timer_cb, offset, interval);
+  if (rx_buf_init(&serv->s_rx_buf, RX_BUF_SIZE) < 0)
+    OOM();
   if (dict_init(&serv->s_frame, NR_JOBS_HINT) < 0)
     OOM();
 
@@ -440,51 +453,48 @@ serv_create(const char *name, ev_tstamp offset, ev_tstamp interval)
 
 static void serv_disconnect(EV_P_ struct serv_struct *serv)
 {
-  if (!serv->connected)
+  if (!serv->s_connected)
     return;
 
+  TRACE("disconnection server `%s'\n", serv->s_name);
   ev_io_stop(EV_A_ &serv->s_io_w);
   close(serv->s_io_w.fd);
   serv->s_io_w.fd = -1;
   /* Clear frames? */
   /* ... */
 
-  serv->connected = 0;
+  serv->s_connected = 0;
 }
 
 static struct serv_struct *
-serv_lookup_by_sockaddr(struct sockaddr *addr, socklen_t addrlen)
+serv_lookup(const char *name, int create)
 {
-  struct serv_struct *serv;
-
-  char name[MAXNAME + 1];
-  memset(name, 0, sizeof(name));
-  int gni_rc = getnameinfo(addr, addrlen, name, sizeof(name), NULL, 0, 0);
-  if (gni_rc != 0) {
-    ERROR("cannot get name info for server connection: %s\n", gai_strerror(gni_rc));
-    return NULL;
-  }
-
+  struct serv_struct *serv = NULL;
   hash_t hash = dict_strhash(name);
   struct dict_entry *de = dict_entry_ref(&name_serv_dict, hash, name);
   if (de->d_key != NULL) {
     GET_NAMED(serv, s_name, de->d_key);
-    return serv;
+    goto have_serv;
   }
 
-  return NULL;
+  /* TODO port. */
+  if (create)
+    serv = serv_create(name, 0., SERV_INTERVAL);
+
+ have_serv:
+  return serv;
 }
 
-static int serv_connect(EV_P_ struct serv_struct *serv,
-			int sfd, struct sockaddr *addr, socklen_t socklen)
+static void serv_connect(EV_P_ struct serv_struct *serv,
+			 int sfd, struct sockaddr *addr, socklen_t addrlen)
 {
   serv_disconnect(EV_A_ serv);
-
+  TRACE("connecting server `%s'\n", serv->s_name);
   memcpy(&serv->s_addr, addr, addrlen);
   serv->s_addrlen = addrlen;
   ev_io_set(&serv->s_io_w, sfd, EV_READ);
   ev_io_start(EV_A_ &serv->s_io_w);
-  serv->connected = 1;
+  serv->s_connected = 1;
 }
 
 static void serv_error(EV_P_ struct serv_struct *serv)
@@ -508,7 +518,7 @@ static void serv_msg(struct serv_struct *serv, char *msg)
   if (cli == NULL)
     OOM();
 
-  struct job_struct *job = client_get_job(cli->c_job, 1);
+  struct job_struct *job = client_get_job(cli, 1);
   if (job == NULL)
     OOM();
 
@@ -540,53 +550,45 @@ static void serv_msg(struct serv_struct *serv, char *msg)
 
   int i;
   for (i = 0; i < NR_STATS; i++)
-    fe->fe_stats[fe->fe_gen % 2][i] += msg_stats[i];
+    fe->fe_stats[fe->fe_gen % 2][i] += stats[i];
 }
 
 static void serv_io_cb(EV_P_ ev_io *w, int revents)
 {
   struct serv_struct *serv = container_of(w, struct serv_struct, s_io_w);
-  struct rx_buf *rb = serv->s_rx_buf;
+  struct rx_buf *rb = &serv->s_rx_buf;
 
   if (revents & EV_ERROR) {
     /* ... */
-    serv_error(serv);
+    serv_error(EV_A_ serv);
     return;
   }
 
-  ssize_t nr_read = rx_buf_read(w->fd, &rb);
+  ssize_t nr_read = rx_buf_read(w->fd, rb);
   if (nr_read < 0) {
     if (may_ignore_errno())
       return;
     ERROR("cannot read from server `%s': %m\n", serv->s_name);
-    serv_error(serv);
+    serv_error(EV_A_ serv);
     return;
   }
 
   char *msg;
-  while ((msg = rx_buf_iter(&rb)) != NULL)
+  while ((msg = rx_buf_iter(rb)) != NULL)
     serv_msg(serv, msg);
-}
-
-/* UNUSED */
-static inline long *fe_stats(struct frame_entry *fe, unsigned int gen)
-{
-  if (fe->fe_gen == gen || fe->fe_gen == gen - 1)
-    return fe->fe_stats[gen % 2];
-  return NULL;
 }
 
 static void serv_timer_cb(EV_P_ ev_timer *w, int revents)
 {
   struct serv_struct *serv = container_of(w, struct serv_struct, s_timer_w);
-  if (!serv->connected)
+  if (!serv->s_connected)
     /* TODO */;
 
   size_t de_iter = 0;
   struct dict_entry *de;
   while ((de = dict_for_each_ref(&serv->s_frame, &de_iter)) != NULL) {
     struct frame_entry *fe;
-    GET_NAMED(fe, fe_name, d->d_key);
+    GET_NAMED(fe, fe_name, de->d_key);
 
     int fe_age = serv->s_gen - fe->fe_gen;
     if (fe_age > FE_AGE_LIMIT) {
@@ -649,7 +651,7 @@ int read_nid_file(const char *path)
  out:
   free(line);
   if (file != NULL)
-    flcose(file);
+    fclose(file);
 
   return rc;
 }
@@ -668,17 +670,86 @@ static void listen_cb(EV_P_ ev_io *w, int revents)
       return;
     FATAL("cannot accept connections: %m\n"); /* ... */
   }
+  fd_set_nonblock(sfd);
 
-  serv = serv_lookup_by_sockaddr((struct sockaddr *) &addr, &addrlen);
+  char name[NI_MAXHOST], port[NI_MAXSERV];
+  int gni_rc = getnameinfo((struct sockaddr *) &addr, addrlen,
+			   name, sizeof(name), port, sizeof(port), 0);
+  if (gni_rc != 0) {
+    ERROR("cannot get name info for server connection: %s\n", gai_strerror(gni_rc));
+    goto err;
+  }
+
+  TRACE("received connection from host `%s', port `%s'\n", name, port);
+  serv = serv_lookup(name, 1); /* XXX create. Port? */
   if (serv == NULL)
     goto err;
 
-  fd_set_nonblock(sfd);
+  serv_connect(EV_A_ serv, sfd, (struct sockaddr *) &addr, addrlen);
+  return;
 
-  if (serv_connect(EV_A_ serv, sfd, (struct sockaddr *) &addr, &addrlen) < 0) {
-  err:
-    close(sfd);
+ err:
+  close(sfd);
+}
+
+static void stdin_cb(EV_P_ ev_io *w, int revents)
+{
+  int c = getch();
+  if (c == ERR)
+    return;
+
+  TRACE("got `%c' from stdin\n", c);
+}
+
+static int 
+job_stats_cmp(const void *v1, const void *v2)
+{
+  const struct job_struct **j1 = (void *) v1, **j2 = (void *) v2;
+  const long *s1 = (*j1)->j_stats, *s2 = (*j2)->j_stats;
+
+  /* Sort descending by writes, then reads, then requests. */
+  /* TODO Make sort rank configurable. */
+  int i;
+  for (i = 0; i < NR_STATS; i++) { /* XXX ORDER */
+    long diff = s1[i] - s2[i];
+    if (diff != 0)
+      return diff > 0 ? -1 : 1;
   }
+
+  return 0;
+}
+
+static void refresh_cb(EV_P_ ev_timer *w, int revents)
+{
+  TRACE("refresh LINES %d, COLS %d\n", LINES, COLS);
+
+  struct job_struct **job_list = NULL;
+  job_list = calloc(nr_jobs, sizeof(job_list[0]));
+  if (job_list == NULL)
+    OOM();
+
+  size_t i = 0, j = 0;
+  char *name;
+  while ((name = dict_for_each(&name_job_dict, &i)) != NULL && j < nr_jobs)
+    GET_NAMED(job_list[j++], j_name, name);
+
+  if (j != nr_jobs)
+    FATAL("internal error: j %zu, nr_jobs %zu\n", j, nr_jobs);
+
+  qsort(job_list, nr_jobs, sizeof(job_list[0]), &job_stats_cmp);
+
+  for (j = 0; j < nr_jobs && j < LINES; j++) {
+    struct job_struct *job = job_list[j];
+
+    char buf[4096];
+    snprintf(buf, sizeof(buf), "%s %ld %ld %ld\n", job->j_name,
+	     job->j_stats[0], job->j_stats[1], job->j_stats[2]);
+    mvaddnstr(j, 0, buf, -1);
+  }
+
+  free(job_list);
+
+  refresh();
 }
 
 int main(int argc, char *argv[])
@@ -686,6 +757,8 @@ int main(int argc, char *argv[])
   const char *bind_host = BIND_HOST, *bind_port = BIND_PORT;
   int listen_backlog = 128; /* XXX */
   struct ev_io listen_w;
+  struct ev_io stdin_w;
+  struct ev_timer refresh_w;
   struct job_mapper mapper;
 
   signal(SIGPIPE, SIG_IGN);
@@ -694,13 +767,15 @@ int main(int argc, char *argv[])
     OOM();
   if (dict_init(&name_job_dict, NR_JOBS_HINT) < 0)
     OOM();
-  if (dict_init(&nid_client_dict, NR_NIDS_HINT) < 0)
+  if (dict_init(&name_serv_dict, NR_SERVS_HINT) < 0)
+    OOM();
+  if (dict_init(&nid_client_dict, NR_CLIENTS_HINT) < 0)
     OOM();
 
   if (read_nid_file(nid_file_path) < 0)
     FATAL("cannot read NID file `%s'\n", nid_file_path);
 
-  if (job_mapper_init(&mapper, job_mapper_cmd) < 0)
+  if (job_mapper_init(EV_DEFAULT_ &mapper, job_mapper_cmd) < 0)
     FATAL("cannot start job mapper `%s'\n", job_mapper_cmd);
 
   struct addrinfo *info, *list, hints = {
@@ -739,9 +814,24 @@ int main(int argc, char *argv[])
   ev_io_init(&listen_w, &listen_cb, lfd, EV_READ);
   ev_io_start(EV_DEFAULT_ &listen_w);
 
-  
+  ev_io_init(&stdin_w, &stdin_cb, 0, EV_READ);
+  ev_io_start(EV_DEFAULT_ &stdin_w);
+
+  ev_timer_init(&refresh_w, &refresh_cb, 0., REFRESH_INTERVAL);
+  ev_timer_start(EV_DEFAULT_ &refresh_w);
+
+  /* Begin curses magic. */
+  /* setlocale(LC_ALL, ""); */
+  initscr();
+  cbreak();
+  noecho();
+  nonl();
+  intrflush(stdscr, 0);
+  keypad(stdscr, 1);
+  nodelay(stdscr, 1);
 
   ev_run(EV_DEFAULT_ 0);
+  endwin(); /* TODO Call on OOM(). */
 
   return 0;
 }
