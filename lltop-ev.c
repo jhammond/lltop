@@ -12,6 +12,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <sys/types.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <ncurses.h>
@@ -31,8 +32,6 @@ const char *nid_file_path = "/tmp/lltop/client-nids";
 #define NR_CLIENTS_HINT 4096
 #define NR_JOBS_HINT 256
 #define NR_SERVS_HINT 128
-#define LLTOP_MSG_SEP ""
-#define LLTOP_MSG_SEP_LEN 1
 #define RX_BUF_SIZE 8096
 #define JOB_NONE "0"
 #define FE_AGE_LIMIT 32
@@ -62,6 +61,7 @@ struct job_mapper {
   struct ev_timer jm_timer_w; /* TODO */
   struct rx_buf jm_rx_buf;
   const char *jm_cmd; /* Or cmdline. */
+  pid_t jm_pid;
 };
 
 struct job_struct {
@@ -346,6 +346,8 @@ static void job_mapper_child_cb(EV_P_ ev_child *w, int revents)
   ev_child_stop(EV_A_ w);
   ERROR("job mapper `%s', pid %d exited with status %x\n",
 	jm->jm_cmd, w->rpid, w->rstatus); /* TODO WIFEXITED, ... */
+
+  jm->jm_pid = 0;
 }
 
 static void job_mapper_io_cb(EV_P_ ev_io *w, int revents)
@@ -392,16 +394,11 @@ int job_mapper_init(EV_P_ struct job_mapper *jm, const char *cmd)
   if (pid == 0) {
     close(pfd[0]);
     dup2(pfd[1], 1);
-    int status = system(cmd); /* BLECH */
-    if (WIFSIGNALED(status))
-      FATAL("job mapper `%s' terminated by %s\n", cmd,
-	    strsignal(WTERMSIG(status)));
-    else if (WIFEXITED(status))
-      FATAL("job mapper `%s' exited with status %d\n", cmd,
-	    WEXITSTATUS(status));
-    else
-      FATAL("job mapper `%s' returned weird status %d\n", cmd,
-	    status);
+    signal(SIGPIPE, SIG_DFL);
+    setpgid(0, 0);
+    execl("/bin/sh", "sh", "-c", cmd, (char *) NULL);
+    ERROR("cannot execute command `%s': %m\n", cmd);
+    exit(255);
   }
 
   close(pfd[1]);
@@ -409,8 +406,6 @@ int job_mapper_init(EV_P_ struct job_mapper *jm, const char *cmd)
   fd_set_nonblock(pfd[0]);
 
   memset(jm, 0, sizeof(*jm));
-
-  jm->jm_cmd = cmd;
 
   ev_io_init(&jm->jm_io_w, &job_mapper_io_cb, pfd[0], EV_READ);
   ev_io_start(EV_A_ &jm->jm_io_w);
@@ -420,6 +415,9 @@ int job_mapper_init(EV_P_ struct job_mapper *jm, const char *cmd)
 
   if (rx_buf_init(&jm->jm_rx_buf, RX_BUF_SIZE) < 0)
     OOM();
+
+  jm->jm_cmd = cmd;
+  jm->jm_pid = pid;
 
   return 0;
 }
@@ -624,6 +622,57 @@ static void serv_timer_cb(EV_P_ ev_timer *w, int revents)
   serv->s_gen++;
 }
 
+static int 
+job_stats_cmp(const void *v1, const void *v2)
+{
+  const struct job_struct **j1 = (void *) v1, **j2 = (void *) v2;
+  const long *s1 = (*j1)->j_stats, *s2 = (*j2)->j_stats;
+
+  /* Sort descending by writes, then reads, then requests. */
+  /* TODO Make sort rank configurable. */
+  int i;
+  for (i = 0; i < NR_STATS; i++) { /* XXX ORDER */
+    long diff = s1[i] - s2[i];
+    if (diff != 0)
+      return diff > 0 ? -1 : 1;
+  }
+
+  return 0;
+}
+
+static void refresh_display(void)
+{
+  TRACE("refresh LINES %d, COLS %d\n", LINES, COLS);
+
+  struct job_struct **job_list = NULL;
+  job_list = calloc(nr_jobs, sizeof(job_list[0]));
+  if (job_list == NULL)
+    OOM();
+
+  size_t i = 0, j = 0;
+  char *name;
+  while ((name = dict_for_each(&name_job_dict, &i)) != NULL && j < nr_jobs)
+    GET_NAMED(job_list[j++], j_name, name);
+
+  if (j != nr_jobs)
+    FATAL("internal error: j %zu, nr_jobs %zu\n", j, nr_jobs);
+
+  qsort(job_list, nr_jobs, sizeof(job_list[0]), &job_stats_cmp);
+
+  for (j = 0; j < nr_jobs && j < LINES; j++) {
+    struct job_struct *job = job_list[j];
+
+    char buf[4096];
+    snprintf(buf, sizeof(buf), "%s %ld %ld %ld\n", job->j_name,
+	     job->j_stats[0], job->j_stats[1], job->j_stats[2]);
+    mvaddnstr(j, 0, buf, -1);
+  }
+
+  free(job_list);
+
+  refresh();
+}
+
 int read_nid_file(const char *path)
 {
   int rc = -1;
@@ -675,7 +724,7 @@ static void listen_cb(EV_P_ ev_io *w, int revents)
 
   sfd = accept(w->fd, (struct sockaddr *) &addr, &addrlen);
   if (sfd < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
+    if (may_ignore_errno())
       return;
     FATAL("cannot accept connections: %m\n"); /* ... */
   }
@@ -708,57 +757,18 @@ static void stdin_cb(EV_P_ ev_io *w, int revents)
     return;
 
   TRACE("got `%c' from stdin\n", c);
-}
-
-static int 
-job_stats_cmp(const void *v1, const void *v2)
-{
-  const struct job_struct **j1 = (void *) v1, **j2 = (void *) v2;
-  const long *s1 = (*j1)->j_stats, *s2 = (*j2)->j_stats;
-
-  /* Sort descending by writes, then reads, then requests. */
-  /* TODO Make sort rank configurable. */
-  int i;
-  for (i = 0; i < NR_STATS; i++) { /* XXX ORDER */
-    long diff = s1[i] - s2[i];
-    if (diff != 0)
-      return diff > 0 ? -1 : 1;
+  switch (c) {
+  case ' ':
+  case '\n':
+    refresh_display();
+    break;
+  case 'q':
+    ev_break(EV_A_ EVBREAK_ALL);
+    break;
+  default:
+    ERROR("unknown command `%c': try `h' for help\n", c); /* TODO help. */
+    break;
   }
-
-  return 0;
-}
-
-static void refresh_display(void)
-{
-  TRACE("refresh LINES %d, COLS %d\n", LINES, COLS);
-
-  struct job_struct **job_list = NULL;
-  job_list = calloc(nr_jobs, sizeof(job_list[0]));
-  if (job_list == NULL)
-    OOM();
-
-  size_t i = 0, j = 0;
-  char *name;
-  while ((name = dict_for_each(&name_job_dict, &i)) != NULL && j < nr_jobs)
-    GET_NAMED(job_list[j++], j_name, name);
-
-  if (j != nr_jobs)
-    FATAL("internal error: j %zu, nr_jobs %zu\n", j, nr_jobs);
-
-  qsort(job_list, nr_jobs, sizeof(job_list[0]), &job_stats_cmp);
-
-  for (j = 0; j < nr_jobs && j < LINES; j++) {
-    struct job_struct *job = job_list[j];
-
-    char buf[4096];
-    snprintf(buf, sizeof(buf), "%s %ld %ld %ld\n", job->j_name,
-	     job->j_stats[0], job->j_stats[1], job->j_stats[2]);
-    mvaddnstr(j, 0, buf, -1);
-  }
-
-  free(job_list);
-
-  refresh();
 }
 
 static void refresh_cb(EV_P_ ev_timer *w, int revents)
@@ -884,6 +894,16 @@ int main(int argc, char *argv[])
   ev_signal_start(EV_DEFAULT_ &sigwinch_w);
 
   ev_run(EV_DEFAULT_ 0);
+
+  if (mapper.jm_pid > 0 && killpg(mapper.jm_pid, SIGTERM) < 0)
+    ERROR("cannot kill job mapper `%s', pid %d: %m\n",
+	  mapper.jm_cmd, mapper.jm_pid);
+
+  if (lfd > 0)
+    shutdown(lfd, SHUT_RDWR);
+
+  /* ... */
+
   endwin(); /* TODO Call on OOM(). */
 
   return 0;
