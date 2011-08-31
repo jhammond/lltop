@@ -32,6 +32,7 @@
 #include <sys/un.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include "string1.h"
 #include "lltop.h"
 #include "dict.h"
 
@@ -41,7 +42,7 @@
 
 struct dict name_stats_dict;
 
-#define NS_WR 0
+#define NS_WR 0 /* MOVEME. */
 #define NS_RD 1
 #define NS_REQS 2
 
@@ -120,18 +121,6 @@ struct lustre_target {
 
 size_t nr_targets = 0;
 struct lustre_target *target_list = NULL;
-
-static inline char *strf(const char *fmt, ...)
-{
-  char *str = NULL;
-  va_list args;
-
-  va_start(args, fmt);
-  if (vasprintf(&str, fmt, args) < 0)
-    str = NULL;
-  va_end(args);
-  return str;
-}
 
 int de_is_subdir(const struct dirent *de)
 {
