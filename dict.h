@@ -21,7 +21,7 @@ struct dict {
   struct dict d = { .d_table = NULL, }
 
 /* The count argument is only a hint. */
-int dict_init(struct dict *dict, size_t count);
+int dict_init(struct dict *dict, size_t hint);
 
 /* dict_destory() is valid for dicts defined by DEFINE_DICT() or
    initialized by dict_init().  It does not free entry keys. */
@@ -30,6 +30,10 @@ void dict_destroy(struct dict *dict, void (*key_dtor)(void*));
 struct dict_entry *dict_entry_ref(struct dict *dict, hash_t hash, const char *key);
 int dict_entry_set(struct dict *dict, struct dict_entry *ent, hash_t hash, char *key);
 char *dict_entry_remv(struct dict *dict, struct dict_entry *ent, int may_resize);
+static inline void dict_allow_resize(struct dict *dict, size_t hint)
+{
+  /* TODO, maybe. */
+}
 
 char *dict_ref(struct dict *dict, const char *key);
 int dict_set(struct dict *dict, char *key);
