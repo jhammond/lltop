@@ -882,7 +882,7 @@ int main(int argc, char *argv[])
   ev_io_start(EV_DEFAULT_ &stdin_w);
 
   struct ev_timer refresh_w;
-  ev_timer_init(&refresh_w, &refresh_cb, 0., REFRESH_INTERVAL);
+  ev_timer_init(&refresh_w, &refresh_cb, 0, REFRESH_INTERVAL);
   ev_timer_start(EV_DEFAULT_ &refresh_w);
 
   struct ev_signal sigint_w;
