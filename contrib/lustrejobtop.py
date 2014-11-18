@@ -52,11 +52,12 @@ def printstats(lltopdata, nodeinfo, joblist):
     for llt in lltopdata[:TOPLINES]:
         print "%10s %10s %10s %10s" % tuple(llt),
         hostname = lustre_to_torque(llt[0])
-        jobs = nodejobs(str(nodeinfo[hostname].status))
-        for j in jobs:
-            jobstats = joblist[j]
-            print "   %s(%s)" % (j.split(".")[0],
-                              str(jobstats.Job_Owner).split("@")[0]),
+        if hostname in nodeinfo:
+            jobs = nodejobs(str(nodeinfo[hostname].status))
+            for j in jobs:
+                jobstats = joblist[j]
+                print "   %s(%s)" % (j.split(".")[0],
+                                     str(jobstats.Job_Owner).split("@")[0]),
         print
 
 def printsummary(lltopdata):
