@@ -3,10 +3,10 @@ import sys
 import operator
 from lxml import objectify
 
-LLTOPCMD = "/home/royd/projects/git/lltop/lltop --lltop-serv=/root/lltop-serv --job-map=/bin/true -i 10"
+LLTOPCMD = "/home/royd/projects/git/lltop/lltop --lltop-serv=/root/lltop-serv --job-map=/bin/true"
 OSSLIST = "10.1.3.1,10.1.3.11,10.1.3.12,10.1.3.13,10.1.3.14".split(",")
 TOPLINES = 10
-
+DELAY = 10
 
 def pbsnodes():
     pbsnodesxml = os.popen('pbsnodes -x', 'r')
@@ -27,7 +27,7 @@ def qstat():
     return jobs
 
 def lltop(hostlist):
-    lltop = os.popen(" ".join([LLTOPCMD, "-l"] + hostlist)).readlines()
+    lltop = os.popen(" ".join([LLTOPCMD, "-i", str(DELAY), "-l"] + hostlist)).readlines()
     #lltop = file("/tmp/lltop.txt", "r").readlines()
     lltopdata = list()
     for line in lltop[1:]:
@@ -64,7 +64,7 @@ def printsummary(lltopdata):
     total_writemb = sum(map(operator.itemgetter(1), lltopdata))
     total_readmb = sum(map(operator.itemgetter(2), lltopdata))
     total_reqs = sum(map(operator.itemgetter(3), lltopdata))
-    print "Total: writes %s MB, reads %s MB, iops %s" % (total_writemb, total_readmb, total_reqs)
+    print "Total: writes %s MB/s, reads %s MB/s, iop/s %s" % (total_writemb/DELAY, total_readmb/DELAY, total_reqs/DELAY)
 
 def main():
     lltopdata = lltop(OSSLIST)
